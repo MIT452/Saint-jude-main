@@ -8,7 +8,7 @@ import { useSelector } from 'react-redux';
 import { RootState } from '../redux';
 import { findUser, formatCurrency, formatDate } from '../Tools/Tools';
 import { Button } from './ui/button';
-import CashMovementFrom from './CashMovementForm';
+import CashMovementFrom from './cashMovementForm';
 import CashFuelConsumption from './FuelConsumptionForm';
 
 interface PropsGestionCaissePage {

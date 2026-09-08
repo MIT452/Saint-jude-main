@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction } from "@reduxjs/toolkit";
-import { Role, Permission } from "@/src/data/type";
+import { Role, Permission } from "../../data/type";
 
 type RoleState = {
   list: Role[]; 

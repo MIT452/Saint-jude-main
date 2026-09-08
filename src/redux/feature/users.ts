@@ -1,5 +1,5 @@
 import { createSlice, PayloadAction, createAsyncThunk } from "@reduxjs/toolkit";
-import { User } from "@/src/data/type";
+import { User } from "../../data/type";
 import { v4 as uuid } from "uuid";
 
 export interface usersState {
