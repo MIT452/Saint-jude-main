@@ -1,7 +1,9 @@
 import axios from "axios";
 import { Boat, User, Goods, Reservation, Trip, CashMovement, FuelConsumption } from "./type";
 
+
 const API = "https://saint-jude-back.onrender.com/api";
+
 
 // CREATE
 export const onAddService = async (
