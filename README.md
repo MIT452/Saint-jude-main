@@ -1,3 +1,4 @@
+Géré par: RABETOKOTANY Ny Tsanta FIderana
 # CargoMaster - Application de Gestion de Cargaison Maritime
 
 Une application moderne et complète pour la gestion de cargaisons maritimes avec interface utilisateur intuitive, tableaux de bord analytiques et suivi en temps réel.
