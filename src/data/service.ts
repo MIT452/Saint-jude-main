@@ -1,9 +1,36 @@
 import axios from "axios";
 import { Boat, User, Goods, Reservation, Trip, CashMovement, FuelConsumption } from "./type";
 
-
 const API = "https://saint-jude-back.onrender.com/api";
 
+export interface AuthCredentials {
+  email: string;
+  password: string;
+}
+
+export interface RegistrationInput extends AuthCredentials {
+  name: string;
+  lastName: string;
+  tel: string;
+}
+
+export const loginUser = async (credentials: AuthCredentials): Promise<User> => {
+  const response = await axios.post<{ user: User }>(
+    `${API}/auth/login`,
+    credentials,
+    { withCredentials: true }
+  );
+  return response.data.user;
+};
+
+export const registerUser = async (registration: RegistrationInput): Promise<User> => {
+  const response = await axios.post<{ user: User }>(
+    `${API}/auth/register`,
+    registration,
+    { withCredentials: true }
+  );
+  return response.data.user;
+};
 
 // CREATE
 export const onAddService = async (
