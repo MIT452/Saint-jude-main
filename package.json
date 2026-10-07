@@ -59,6 +59,7 @@
     "react-toastify": "^11.0.5",
     "recharts": "^2.12.7",
     "redux": "^5.0.1",
+    "socket.io-client": "^4.8.4",
     "sonner": "2.0.3",
     "tailwind-merge": "^2.3.0",
     "uuid": "^11.1.0",

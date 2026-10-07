@@ -8,7 +8,8 @@ export type Permission =
   | "trajets:manage"
   | "users:manage"
   | "profile:read"
-  | "fueldManage:manage";
+  | "fueldManage:manage"
+  | "intelligence:read";
   
 export const permissionLabels: Record<Permission, string> = {
   "dashboard:read": "Tableau de Bord",
@@ -19,6 +20,7 @@ export const permissionLabels: Record<Permission, string> = {
   "users:manage": "Équipe",
   "profile:read": "Profil",
   "fueldManage:manage": "Carburant",
+  "intelligence:read": "Opérations IA",
 };
 export type statusTrip = "Encours" | "Arriver" | "Prévu";
 export type EtatBoat = "En construction" | "En service" | "En maintenance" | "En panne" | "Désarmé" | "Hors service"

@@ -10,6 +10,7 @@ import { ToastContainer } from 'react-toastify';
 import Profile from "./components/Profile";
 import FuelConsumption from "./components/FuelConsumption";
 import Audit from "./components/Audit";
+import IntelligenceDashboard from "./components/IntelligenceDashboard";
 import { useSelector } from "react-redux";
 import { RootState } from "./redux";
 import { menuItems } from "./components/SidebarMenue";
@@ -58,6 +59,8 @@ const App = () => {
         return <FuelConsumption />
       case "Audit":
         return <Audit />
+      case "intelligence":
+        return <IntelligenceDashboard />
       default:
         return <Profile />
     }
