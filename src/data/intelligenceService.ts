@@ -1,6 +1,20 @@
 import axios from "axios";
 
+// Configuration de la base URL avec fallback production
 const API = import.meta.env.VITE_API_URL || "https://saint-jude-back.onrender.com/api";
+
+// Config globale Axios pour inclure les cookies de session
+const axiosClient = axios.create({
+  baseURL: API,
+  withCredentials: true,
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+/* ==========================================================================
+   TYPES & INTERFACES
+   ========================================================================== */
 
 export interface PositionPayload {
   boatId: string;
@@ -16,73 +30,118 @@ export interface OptimizationPayload {
 
 export interface ChatPayload {
   question: string;
+  context?: string;
 }
 
+export interface MLPredictionPayload {
+  boatId: string;
+  destination?: string;
+}
+
+export interface WeatherPayload {
+  lat: number;
+  lng: number;
+}
+
+/* ==========================================================================
+   1. SERVICE GPS & POSITIONS TEMPS RÉEL
+   ========================================================================== */
+
 export const getLatestPosition = async (boatId: string) => {
-  const { data } = await axios.get(`${API}/positions/${boatId}/latest`, { withCredentials: true });
+  const { data } = await axiosClient.get(`/positions/${boatId}/latest`);
   return data;
 };
 
 export const postPosition = async (position: PositionPayload) => {
-  const { data } = await axios.post(`${API}/positions`, position, { withCredentials: true });
+  const { data } = await axiosClient.post(`/positions`, position);
   return data;
 };
 
+/* ==========================================================================
+   2. SERVICE OPTIMISATION DE ROUTE
+   ========================================================================== */
+
 export const optimizeRoute = async (payload: OptimizationPayload) => {
-  const { data } = await axios.post(`${API}/optimization/order`, payload, { withCredentials: true });
+  const { data } = await axiosClient.post(`/optimization/order`, payload);
   return data;
 };
 
 export const optimizePath = async (depart: string, arrivee: string) => {
-  const { data } = await axios.get(`${API}/optimization/path`, {
+  const { data } = await axiosClient.get(`/optimization/path`, {
     params: { depart, arrivee },
-    withCredentials: true,
   });
-  return data;
-};
-
-export const askAssistant = async (payload: ChatPayload) => {
-  const { data } = await axios.post(`${API}/ai/chat`, payload, { withCredentials: true });
-  return data;
-};
-
-export const tapRag = async (query: string) => {
-  const { data } = await axios.post(`${API}/ai/rag`, { query }, { withCredentials: true });
-  return data;
-};
-
-export const selectTools = async (question: string) => {
-  const { data } = await axios.post(`${API}/ai/jit`, { question }, { withCredentials: true });
-  return data;
-};
-
-export const runMultiAgent = async (question: string) => {
-  const { data } = await axios.post(`${API}/ai/multi-agent`, { question }, { withCredentials: true });
-  return data;
-};
-
-export const evaluateAnswer = async (answer: string, expected?: string) => {
-  const { data } = await axios.post(`${API}/ai/evaluate`, { answer, expected }, { withCredentials: true });
-  return data;
-};
-
-export const classifyIntent = async (message: string) => {
-  const { data } = await axios.post(`${API}/ai-capabilities/classify`, { message }, { withCredentials: true });
-  return data;
-};
-
-export const getCapabilitiesStatus = async () => {
-  const { data } = await axios.get(`${API}/ai-capabilities/status`, { withCredentials: true });
-  return data;
-};
-
-export const getAiStatus = async () => {
-  const { data } = await axios.get(`${API}/ai-capabilities/status`, { withCredentials: true });
   return data;
 };
 
 export const getOptimizationPath = async (depart: string, arrivee: string) =>
   optimizePath(depart, arrivee);
 
-export const getRealtimeOrigin = () =>
-  import.meta.env.VITE_SOCKET_URL || "https://saint-jude-back.onrender.com";
+/* ==========================================================================
+   3. SERVICE IA & AGENTS MULTI-TÂCHES
+   ========================================================================== */
+
+export const askAssistant = async (payload: ChatPayload) => {
+  const { data } = await axiosClient.post(`/ai/chat`, payload);
+  return data;
+};
+
+export const tapRag = async (query: string) => {
+  const { data } = await axiosClient.post(`/ai/rag`, { query });
+  return data;
+};
+
+export const selectTools = async (question: string) => {
+  const { data } = await axiosClient.post(`/ai/jit`, { question });
+  return data;
+};
+
+export const runMultiAgent = async (question: string) => {
+  const { data } = await axiosClient.post(`/ai/multi-agent`, { question });
+  return data;
+};
+
+export const evaluateAnswer = async (answer: string, expected?: string) => {
+  const { data } = await axiosClient.post(`/ai/evaluate`, { answer, expected });
+  return data;
+};
+
+/* ==========================================================================
+   4. SERVICE CAPACITÉS & MONITORING IA
+   ========================================================================== */
+
+export const classifyIntent = async (message: string) => {
+  const { data } = await axiosClient.post(`/ai-capabilities/classify`, { message });
+  return data;
+};
+
+export const getCapabilitiesStatus = async () => {
+  const { data } = await axiosClient.get(`/ai-capabilities/status`);
+  return data;
+};
+
+export const getAiStatus = async () => {
+  const { data } = await axiosClient.get(`/ai/status`);
+  return data;
+};
+
+/* ==========================================================================
+   5. SERVICE MÉTÉO & PRÉDICTIONS ML (AJOUTS D'INTÉGRATION)
+   ========================================================================== */
+
+export const getWeatherForecast = async (coords: WeatherPayload) => {
+  const { data } = await axiosClient.get(`/weather/forecast`, { params: coords });
+  return data;
+};
+
+export const getMLPredictions = async (payload: MLPredictionPayload) => {
+  const { data } = await axiosClient.post(`/ml/predict`, payload);
+  return data;
+};
+
+/* ==========================================================================
+   6. CONFIGURATION WEBSOCKET ORIGIN
+   ========================================================================== */
+
+export const getRealtimeOrigin = (): string => {
+  return import.meta.env.VITE_SOCKET_URL || "https://saint-jude-back.onrender.com";
+};
