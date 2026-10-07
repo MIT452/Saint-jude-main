@@ -1,4 +1,5 @@
 import axios from "axios";
+import type { ReservationRecord } from "../services/reservationService";
 
 // Configuration de la base URL avec fallback production
 const API = import.meta.env.VITE_API_URL || "https://saint-jude-back.onrender.com/api";
@@ -32,6 +33,9 @@ export interface ChatPayload {
   question: string;
   context?: string;
 }
+
+export const createReservationAnnouncement = (reservation: ReservationRecord): string =>
+  `Réservation confirmée pour le client ${reservation.clientName}. Voyage de ${reservation.departure} vers ${reservation.destination}, le ${reservation.date}. Bateau ${reservation.boatName}. Passagers : ${reservation.passengers}. Marchandise : ${reservation.cargoType}, ${reservation.cargo}. Poids total : ${reservation.totalWeightKg} kilogrammes. Prix total : ${reservation.totalPrice} euros.`;
 
 export interface MLPredictionPayload {
   boatId: string;

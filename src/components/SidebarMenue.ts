@@ -75,4 +75,11 @@ export const menuItems = [
     description: "Chatbot, GPS, monitoring et optimisation",
     permission: "intelligence:read" as Permission,
   },
+  {
+    id: "reservations",
+    label: "Réservations multimodales",
+    icon: Package,
+    description: "Réservation, IA, voix et notifications",
+    permission: "merchandise:manage" as Permission,
+  },
 ];
