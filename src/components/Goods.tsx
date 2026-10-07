@@ -133,6 +133,7 @@ const filteredReservations = allReservation.filter((reservation) => {
                     <TableHead className="text-right">Montant Payer</TableHead>
                     <TableHead className="text-right">Montant Restant</TableHead>
                     <TableHead className="text-center">Paiement</TableHead>
+                    <TableHead className="text-center">Statut</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -169,6 +170,14 @@ const filteredReservations = allReservation.filter((reservation) => {
                             className={reservation.paymentStatus ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}
                           >
                             {reservation.paymentStatus ? 'Oui' : 'Non'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          <Badge
+                            variant={reservation.status === "Terminé" ? "default" : reservation.status === "Annulé" ? "destructive" : "secondary"}
+                            className={reservation.status === "Terminé" ? "bg-green-100 text-green-800" : reservation.status === "Annulé" ? "bg-red-100 text-red-800" : "bg-blue-100 text-blue-800"}
+                          >
+                            {reservation.status || "Non défini"}
                           </Badge>
                         </TableCell>
                       </TableRow>

@@ -70,9 +70,9 @@ export const menuItems = [
   },
   {
     id: "intelligence",
-    label: "Opérations IA",
+    label: "Dashboard Intelligent",
     icon: ScanSearch,
-    description: "GPS, IA, optimisation et supervision",
+    description: "Chatbot, GPS, monitoring et optimisation",
     permission: "intelligence:read" as Permission,
   },
 ];

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSelector } from "react-redux";
 import { io, type Socket } from "socket.io-client";
+import type { RootState } from "../redux";
 import {
   askAssistant,
   classifyIntent,
@@ -20,11 +22,11 @@ import { Alert, AlertDescription, AlertTitle } from "./ui/alert";
 import { Badge } from "./ui/badge";
 
 const tabs = [
-  { id: "gps", label: "GPS & realtime" },
+  { id: "gps", label: "GPS & temps réel" },
   { id: "routing", label: "Optimisation" },
-  { id: "assistant", label: "Assistant IA" },
+  { id: "chatbot", label: "Chatbot IA" },
   { id: "tools", label: "Outils IA" },
-  { id: "monitoring", label: "Supervision" },
+  { id: "monitoring", label: "Monitoring Dashboard" },
 ] as const;
 
 type Tab = (typeof tabs)[number]["id"];
@@ -51,6 +53,25 @@ export default function IntelligenceDashboard() {
   const [capabilitiesStatus, setCapabilitiesStatus] = useState<ApiStatus>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const { reservation, cashMouvement, boat, trip } = useSelector((state: RootState) => state.stJude);
+
+  const monitoringMetrics = useMemo(() => {
+    const paidReservations = reservation.filter(item => item.paymentStatus).length;
+    const outstanding = reservation.reduce((sum, item) => sum + Number(item.amountToPay || 0), 0);
+    const totalCredits = cashMouvement.reduce((sum, item) => sum + Number(item.credit || 0), 0);
+    const totalDebits = cashMouvement.reduce((sum, item) => sum + Number(item.debit || 0), 0);
+
+    return {
+      reservations: reservation.length,
+      paidReservations,
+      outstanding,
+      boats: boat.length,
+      trips: trip.length,
+      totalCredits,
+      totalDebits,
+      netBalance: totalCredits - totalDebits,
+    };
+  }, [reservation, cashMouvement, boat, trip]);
 
   useEffect(() => {
     let socket: Socket | null = null;
@@ -147,8 +168,8 @@ export default function IntelligenceDashboard() {
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-2">
-        <h1 className="text-2xl font-semibold text-primary">Opérations intelligentes</h1>
-        <p className="text-sm text-muted-foreground">GPS, optimisation, IA, outils, approbations et supervision intégrés au backend.</p>
+        <h1 className="text-2xl font-semibold text-primary">Dashboard Intelligent</h1>
+        <p className="text-sm text-muted-foreground">Chatbot, GPS, monitoring, optimisation et outils IA.</p>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
@@ -193,13 +214,13 @@ export default function IntelligenceDashboard() {
         </Card>
       )}
 
-      {activeTab === "assistant" && (
+      {activeTab === "chatbot" && (
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
-            <CardHeader><CardTitle>Assistant IA</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Chatbot IA</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <Textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Posez une question métier…" />
-              <Button onClick={handleAssistant} disabled={loading}>Interroger l’assistant</Button>
+              <Button onClick={handleAssistant} disabled={loading}>Interroger le chatbot</Button>
               <Button variant="outline" onClick={handleMultiAgent} disabled={loading}>Lancer les agents multiples</Button>
             </CardContent>
           </Card>
@@ -235,26 +256,34 @@ export default function IntelligenceDashboard() {
       )}
 
       {activeTab === "monitoring" && (
-        <div className="grid gap-4 md:grid-cols-2">
-          <Card>
-            <CardHeader><CardTitle>État des services</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              {capabilities.map((item) => (
-                <div key={item.label} className="flex items-center justify-between border-b pb-2">
-                  <span className="text-sm">{item.label}</span>
-                  <Badge variant="secondary">{item.value}</Badge>
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-          <Card>
-            <CardHeader><CardTitle>Évaluation et intent</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <Textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Exemples : nouvelle réservation, capacité, etc." />
-              <Button variant="outline" onClick={handleClassify} disabled={loading}>Classifier l’intent</Button>
-              <p className="text-xs text-muted-foreground">Les endpoints de capacités permettent l’interface de classification, extraction et validation sans exécuter de logique privée.</p>
-            </CardContent>
-          </Card>
+        <div className="space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <Card><CardHeader><CardTitle>Réservations</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold">{monitoringMetrics.reservations}</p><p className="text-xs text-muted-foreground">{monitoringMetrics.paidReservations} payées</p></CardContent></Card>
+            <Card><CardHeader><CardTitle>Montant restant</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold">{monitoringMetrics.outstanding.toLocaleString("fr-FR")} Ar</p><p className="text-xs text-muted-foreground">À recouvrer</p></CardContent></Card>
+            <Card><CardHeader><CardTitle>Bateaux & voyages</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold">{monitoringMetrics.boats} / {monitoringMetrics.trips}</p><p className="text-xs text-muted-foreground">Bateaux / voyages actifs</p></CardContent></Card>
+            <Card><CardHeader><CardTitle>Solde caisse</CardTitle></CardHeader><CardContent><p className="text-2xl font-semibold">{monitoringMetrics.netBalance.toLocaleString("fr-FR")} Ar</p><p className="text-xs text-muted-foreground">Crédits moins débits</p></CardContent></Card>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card>
+              <CardHeader><CardTitle>État des services</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                {capabilities.map((item) => (
+                  <div key={item.label} className="flex items-center justify-between border-b pb-2">
+                    <span className="text-sm">{item.label}</span>
+                    <Badge variant="secondary">{item.value}</Badge>
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader><CardTitle>Évaluation et intent</CardTitle></CardHeader>
+              <CardContent className="space-y-3">
+                <Textarea value={question} onChange={(event) => setQuestion(event.target.value)} placeholder="Exemples : nouvelle réservation, capacité, etc." />
+                <Button variant="outline" onClick={handleClassify} disabled={loading}>Classifier l’intent</Button>
+                <p className="text-xs text-muted-foreground">Les données du monitoring sont calculées depuis le store Redux et les services IA.</p>
+              </CardContent>
+            </Card>
+          </div>
         </div>
       )}
     </div>
