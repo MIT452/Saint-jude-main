@@ -210,7 +210,7 @@ const onAdd = async () => {
       destName: formData.recipientName,
       destTel: formData.recipientPhone,
       destAdresse: formData.recipientAddress,
-      status: "En cours",
+            status: "EN_ATTENTE",
       date: `${new Date().toISOString()}`,
       quantity: currentGoods.reduce((acc, { quantity }) => acc + Number(quantity), 0),
       weight: currentGoods.reduce((acc, { totalWeight }) => acc + Number(totalWeight), 0),
