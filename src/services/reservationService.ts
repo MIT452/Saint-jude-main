@@ -50,6 +50,7 @@ export const updateReservationStatus = async (
 ): Promise<ReservationRecord> => {
   const current = readReservations();
   const updated = current.map((item) => item.id === reservationId ? { ...item, status } : item);
+  // Correctif : sans cette ligne, le nouveau statut n'était jamais enregistré.
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
   return updated.find((item) => item.id === reservationId) as ReservationRecord;
 };
