@@ -2,7 +2,6 @@ import axios from "axios";
 import { Boat, User, Goods, Reservation, Trip, CashMovement, FuelConsumption } from "./type";
 
 const API = "https://saint-jude-back.onrender.com/api";
-
 export interface AuthCredentials {
   email: string;
   password: string;
