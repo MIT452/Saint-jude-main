@@ -7,13 +7,61 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Plus, Search, Filter, Package } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux';
-import { findBoat, findTrip, findUser, formatCityName, formatCurrency } from '../Tools/Tools';
+import { findBoat, findTrip, findUser, formatCityName, formatCurrency }from '../Tools/Tools';
 import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
 import { Badge } from './ui/badge';
 import { Goods, Reservation } from '../data/type';
 import { reservationVoid } from '../data/dataVoid';
+
+/* =========================
+   Paiement : Payé / Partiel / Non payé
+   (calculé à partir des montants, pas du booléen paymentStatus)
+========================= */
+type PaymentState = 'PAID' | 'PARTIAL' | 'UNPAID';
+
+const getPaymentState = (reservation: Reservation): PaymentState => {
+  const total = Number(reservation.totalPrice) || 0;
+  const paid = Number(reservation.amountPaid) || 0;
+  if (total > 0 && paid >= total) return 'PAID';
+  if (paid > 0) return 'PARTIAL';
+  return 'UNPAID';
+};
+
+const paymentConfig: Record<PaymentState, { label: string; className: string }> = {
+  PAID: { label: 'Payé', className: 'bg-green-100 text-green-800' },
+  PARTIAL: { label: 'Partiel', className: 'bg-orange-100 text-orange-800' },
+  UNPAID: { label: 'Non payé', className: 'bg-red-100 text-red-800' },
+};
+
+/* =========================
+   Statut de la réservation
+   Valeurs en base : EN_ATTENTE, CONFIRMEE, REFUSEE, ANNULEE, NO_SHOW, TERMINEE
+========================= */
+type StatusValue = 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'DONE' | 'REFUSED' | 'NO_SHOW';
+
+const normalizeStatus = (raw?: string): StatusValue => {
+  const value = (raw ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase();
+  if (value.includes('NO_SHOW')) return 'NO_SHOW';
+  if (value.includes('REFUS')) return 'REFUSED';
+  if (value.includes('CANCEL') || value.includes('ANNUL')) return 'CANCELLED';
+  if (value.includes('TERMIN')) return 'DONE';
+  if (value.includes('CONFIRM')) return 'CONFIRMED';
+  return 'PENDING'; // EN_ATTENTE ou valeur vide
+};
+
+const statusConfig: Record<StatusValue, { label: string; className: string }> = {
+  PENDING: { label: 'En attente', className: 'bg-orange-100 text-orange-800' },
+  CONFIRMED: { label: 'Confirmée', className: 'bg-green-100 text-green-800' },
+  CANCELLED: { label: 'Annulée', className: 'bg-red-100 text-red-800' },
+  DONE: { label: 'Terminée', className: 'bg-blue-100 text-blue-800' },
+  REFUSED: { label: 'Refusée', className: 'bg-red-100 text-red-800' },
+  NO_SHOW: { label: 'Absent', className: 'bg-gray-200 text-gray-800' },
+};
 
 const MarchandiseManagementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
@@ -29,6 +77,14 @@ const MarchandiseManagementPage = () => {
   const allGoods = useSelector((state: RootState) => state.stJude.goods);
   const alltrip = useSelector((state: RootState) => state.stJude.trip);
 
+  // Nom du caissier : liste des utilisateurs, sinon l'utilisateur connecté, sinon "Inconnu"
+  const getCashierName = (userId: string) => {
+    const user =
+      allUser.find((candidate) => candidate.id === userId) ??
+      (currentUser && currentUser.id === userId ? currentUser : undefined);
+    return user ? `${user.name} ${user.lastName}` : 'Inconnu';
+  };
+
 const filteredReservations = allReservation.filter((reservation) => {
   // 0. Vérifier si c'est un Capitaine
   if(currentUser)
@@ -40,9 +96,11 @@ const filteredReservations = allReservation.filter((reservation) => {
     if (!boat.crew.includes(currentUser.id)) return false;
   }
 
-  // 1. Filtrage par statut paiement
-  if (statusFilter === "paid" && !reservation.paymentStatus) return false;
-  if (statusFilter === "unpaid" && reservation.paymentStatus) return false;
+  // 1. Filtrage par état de paiement
+  const paymentState = getPaymentState(reservation);
+  if (statusFilter === "paid" && paymentState !== 'PAID') return false;
+  if (statusFilter === "partial" && paymentState !== 'PARTIAL') return false;
+  if (statusFilter === "unpaid" && paymentState !== 'UNPAID') return false;
 
   // 2. Recherche (client, destinataire, ID, utilisateur, trajet)
   const search = searchTerm.toLowerCase();
@@ -103,6 +161,7 @@ const filteredReservations = allReservation.filter((reservation) => {
                   <SelectContent>
                     <SelectItem value="all">Tous les statuts</SelectItem>
                     <SelectItem value="paid">Payé</SelectItem>
+                    <SelectItem value="partial">Partiel</SelectItem>
                     <SelectItem value="unpaid">Non payé</SelectItem>
                   </SelectContent>
                 </Select>
@@ -138,7 +197,9 @@ const filteredReservations = allReservation.filter((reservation) => {
                 </TableHeader>
                 <TableBody>
                   {filteredReservations.map((reservation , key) => {
-                    const trip = findTrip(reservation.tripId, alltrip); // retrouver le trip lié
+                    const trip = findTrip(reservation.tripId, alltrip);// retrouver le trip lié
+                    const payment = paymentConfig[getPaymentState(reservation)];
+                    const status = statusConfig[normalizeStatus(reservation.status as string | undefined)];
                     return (
                       <TableRow
                         key={key}
@@ -156,28 +217,20 @@ const filteredReservations = allReservation.filter((reservation) => {
                         </TableCell>
                         <TableCell>{reservation.clientName}</TableCell>
                         <TableCell>{reservation.destName}</TableCell>
-                        <TableCell>
-                          {`${findUser(reservation.userId, allUser).name} ${findUser(reservation.userId, allUser).lastName}`}
-                        </TableCell>
+                        <TableCell>{getCashierName(reservation.userId)}</TableCell>
                         <TableCell className="text-right">{Number(reservation.quantity)}</TableCell>
                         <TableCell className="text-right">{reservation.weight}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.totalPrice)}</TableCell>
                         <TableCell className="text-right">{formatCurrency(reservation.amountPaid)}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.amountToPay)}</TableCell>
                         <TableCell className="text-center">
-                          <Badge
-                            variant={reservation.paymentStatus ? "default" : "destructive"}
-                            className={reservation.paymentStatus ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"}
-                          >
-                            {reservation.paymentStatus ? 'Oui' : 'Non'}
+                          <Badge variant="secondary" className={payment.className}>
+                            {payment.label}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Badge
-                            variant={reservation.status === "Terminé" ? "default" : reservation.status === "Annulé" ? "destructive" : "secondary"}
-                            className={reservation.status === "Terminé" ? "bg-green-100 text-green-800" : reservation.status === "Annulé" ? "bg-red-100 text-red-800" : "bg-blue-100 text-blue-800"}
-                          >
-                            {reservation.status || "Non défini"}
+                          <Badge variant="secondary" className={status.className}>
+                            {status.label}
                           </Badge>
                         </TableCell>
                       </TableRow>
