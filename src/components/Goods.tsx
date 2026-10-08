@@ -19,48 +19,48 @@ import { reservationVoid } from '../data/dataVoid';
    Paiement : Payé / Partiel / Non payé
    (calculé à partir des montants, pas du booléen paymentStatus)
 ========================= */
-type PaymentState = 'PAID' | 'PARTIAL' | 'UNPAID';
+type EtatPaiement = 'PAYE' | 'PARTIEL' | 'NON_PAYE';
 
-const getPaymentState = (reservation: Reservation): PaymentState => {
+const getEtatPaiement = (reservation: Reservation): EtatPaiement => {
   const total = Number(reservation.totalPrice) || 0;
-  const paid = Number(reservation.amountPaid) || 0;
-  if (total > 0 && paid >= total) return 'PAID';
-  if (paid > 0) return 'PARTIAL';
-  return 'UNPAID';
+  const paye = Number(reservation.amountPaid) || 0;
+  if (total > 0 && paye >= total) return 'PAYE';
+  if (paye > 0) return 'PARTIEL';
+  return 'NON_PAYE';
 };
 
-const paymentConfig: Record<PaymentState, { label: string; className: string }> = {
-  PAID: { label: 'Payé', className: 'bg-green-100 text-green-800' },
-  PARTIAL: { label: 'Partiel', className: 'bg-orange-100 text-orange-800' },
-  UNPAID: { label: 'Non payé', className: 'bg-red-100 text-red-800' },
+const configPaiement: Record<EtatPaiement, { libelle: string; classe: string }> = {
+  PAYE: { libelle: 'Payé', classe: 'bg-green-100 text-green-800' },
+  PARTIEL: { libelle: 'Partiel', classe: 'bg-orange-100 text-orange-800' },
+  NON_PAYE: { libelle: 'Non payé', classe: 'bg-red-100 text-red-800' },
 };
 
 /* =========================
-   Statut de la réservation
-   Valeurs en base : EN_ATTENTE, CONFIRMEE, REFUSEE, ANNULEE, NO_SHOW, TERMINEE
+   Statut de la réservation (valeurs de la base, en français)
+   EN_ATTENTE, CONFIRMEE, REFUSEE, ANNULEE, NO_SHOW, TERMINEE
 ========================= */
-type StatusValue = 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'DONE' | 'REFUSED' | 'NO_SHOW';
+type StatutReservation = 'EN_ATTENTE' | 'CONFIRMEE' | 'REFUSEE' | 'ANNULEE' | 'NO_SHOW' | 'TERMINEE';
 
-const normalizeStatus = (raw?: string): StatusValue => {
-  const value = (raw ?? '')
+const normaliserStatut = (brut?: string): StatutReservation => {
+  const valeur = (brut ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toUpperCase();
-  if (value.includes('NO_SHOW')) return 'NO_SHOW';
-  if (value.includes('REFUS')) return 'REFUSED';
-  if (value.includes('CANCEL') || value.includes('ANNUL')) return 'CANCELLED';
-  if (value.includes('TERMIN')) return 'DONE';
-  if (value.includes('CONFIRM')) return 'CONFIRMED';
-  return 'PENDING'; // EN_ATTENTE ou valeur vide
+  if (valeur.includes('NO_SHOW')) return 'NO_SHOW';
+  if (valeur.includes('REFUS')) return 'REFUSEE';
+  if (valeur.includes('ANNUL')) return 'ANNULEE';
+  if (valeur.includes('TERMIN')) return 'TERMINEE';
+  if (valeur.includes('CONFIRM')) return 'CONFIRMEE';
+  return 'EN_ATTENTE';
 };
 
-const statusConfig: Record<StatusValue, { label: string; className: string }> = {
-  PENDING: { label: 'En attente', className: 'bg-orange-100 text-orange-800' },
-  CONFIRMED: { label: 'Confirmée', className: 'bg-green-100 text-green-800' },
-  CANCELLED: { label: 'Annulée', className: 'bg-red-100 text-red-800' },
-  DONE: { label: 'Terminée', className: 'bg-blue-100 text-blue-800' },
-  REFUSED: { label: 'Refusée', className: 'bg-red-100 text-red-800' },
-  NO_SHOW: { label: 'Absent', className: 'bg-gray-200 text-gray-800' },
+const configStatut: Record<StatutReservation, { libelle: string; classe: string }> = {
+  EN_ATTENTE: { libelle: 'En attente', classe: 'bg-orange-100 text-orange-800' },
+  CONFIRMEE: { libelle: 'Confirmée', classe: 'bg-green-100 text-green-800' },
+  REFUSEE: { libelle: 'Refusée', classe: 'bg-red-100 text-red-800' },
+  ANNULEE: { libelle: 'Annulée', classe: 'bg-red-100 text-red-800' },
+  NO_SHOW: { libelle: 'Absent', classe: 'bg-gray-200 text-gray-800' },
+  TERMINEE: { libelle: 'Terminée', classe: 'bg-blue-100 text-blue-800' },
 };
 
 const MarchandiseManagementPage = () => {
@@ -78,9 +78,9 @@ const MarchandiseManagementPage = () => {
   const alltrip = useSelector((state: RootState) => state.stJude.trip);
 
   // Nom du caissier : liste des utilisateurs, sinon l'utilisateur connecté, sinon "Inconnu"
-  const getCashierName = (userId: string) => {
+  const getNomCaissier = (userId: string) => {
     const user =
-      allUser.find((candidate) => candidate.id === userId) ??
+      allUser.find((candidat) => candidat.id === userId) ??
       (currentUser && currentUser.id === userId ? currentUser : undefined);
     return user ? `${user.name} ${user.lastName}` : 'Inconnu';
   };
@@ -97,10 +97,10 @@ const filteredReservations = allReservation.filter((reservation) => {
   }
 
   // 1. Filtrage par état de paiement
-  const paymentState = getPaymentState(reservation);
-  if (statusFilter === "paid" && paymentState !== 'PAID') return false;
-  if (statusFilter === "partial" && paymentState !== 'PARTIAL') return false;
-  if (statusFilter === "unpaid" && paymentState !== 'UNPAID') return false;
+  const etatPaiement = getEtatPaiement(reservation);
+  if (statusFilter === "paid" && etatPaiement !== 'PAYE') return false;
+  if (statusFilter === "partial" && etatPaiement !== 'PARTIEL') return false;
+  if (statusFilter === "unpaid" && etatPaiement !== 'NON_PAYE') return false;
 
   // 2. Recherche (client, destinataire, ID, utilisateur, trajet)
   const search = searchTerm.toLowerCase();
@@ -198,8 +198,8 @@ const filteredReservations = allReservation.filter((reservation) => {
                 <TableBody>
                   {filteredReservations.map((reservation , key) => {
                     const trip = findTrip(reservation.tripId, alltrip);// retrouver le trip lié
-                    const payment = paymentConfig[getPaymentState(reservation)];
-                    const status = statusConfig[normalizeStatus(reservation.status as string | undefined)];
+                    const paiement = configPaiement[getEtatPaiement(reservation)];
+                    const statut = configStatut[normaliserStatut(reservation.status as string | undefined)];
                     return (
                       <TableRow
                         key={key}
@@ -217,20 +217,20 @@ const filteredReservations = allReservation.filter((reservation) => {
                         </TableCell>
                         <TableCell>{reservation.clientName}</TableCell>
                         <TableCell>{reservation.destName}</TableCell>
-                        <TableCell>{getCashierName(reservation.userId)}</TableCell>
+                        <TableCell>{getNomCaissier(reservation.userId)}</TableCell>
                         <TableCell className="text-right">{Number(reservation.quantity)}</TableCell>
                         <TableCell className="text-right">{reservation.weight}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.totalPrice)}</TableCell>
                         <TableCell className="text-right">{formatCurrency(reservation.amountPaid)}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.amountToPay)}</TableCell>
                         <TableCell className="text-center">
-                          <Badge variant="secondary" className={payment.className}>
-                            {payment.label}
+                          <Badge variant="secondary" className={paiement.classe}>
+                            {paiement.libelle}
                           </Badge>
                         </TableCell>
                         <TableCell className="text-center">
-                          <Badge variant="secondary" className={status.className}>
-                            {status.label}
+                          <Badge variant="secondary" className={statut.classe}>
+                            {statut.libelle}
                           </Badge>
                         </TableCell>
                       </TableRow>
