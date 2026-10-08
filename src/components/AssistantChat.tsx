@@ -200,37 +200,82 @@ export default function AssistantChat({
   }, [messages, isLoading]);
 
   // Arrêt du micro quand le composant est démonté
-  useEffect(() => () => recognitionRef.current?.stop(), []);
+  useEffect(
+    () => () => {
+      voiceMode.current = false;
+      recognitionRef.current?.stop();
+      window.speechSynthesis?.cancel();
+    },
+    [],
+  );
 
-  const push = (role: ChatMessage["role"], content: string) =>
+  const lastReply = useRef("");
+  const voiceMode = useRef(false); // true tant que l'échange se fait à la voix
+  const submitRef = useRef<(m: string, byVoice: boolean) => Promise<void>>(async () => {});
+
+  const push = (role: ChatMessage["role"], content: string) => {
+    if (role === "assistant") lastReply.current = content;
     setMessages((c) => [...c, { id: crypto.randomUUID(), role, content }]);
+  };
 
-  const toggleMic = () => {
+  // Lecture vocale de la réponse (retourne quand la phrase est terminée)
+  const speak = (text: string) =>
+    new Promise<void>((resolve) => {
+      if (!("speechSynthesis" in window)) return resolve();
+      window.speechSynthesis.cancel();
+      const u = new SpeechSynthesisUtterance(text.replace(/[✅]/g, "").replace(/\n+/g, ". "));
+      u.lang = "fr-FR";
+      u.onend = () => resolve();
+      u.onerror = () => resolve();
+      window.speechSynthesis.speak(u);
+    });
+
+  const startListening = () => {
     const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
     if (!SR) {
+      voiceMode.current = false;
       push("assistant", "Le micro n'est pas supporté par ce navigateur. Utilisez Chrome ou Edge.");
       return;
     }
-    if (listening) {
-      recognitionRef.current?.stop();
-      return;
-    }
     const rec = new SR();
+    let transcript = "";
     rec.lang = "fr-FR";
     rec.interimResults = true;
     rec.continuous = false;
-    rec.onresult = (e: any) =>
-      setQuestion(Array.from(e.results).map((r: any) => r[0].transcript).join(""));
-    rec.onend = () => setListening(false);
+    rec.onresult = (e: any) => {
+      transcript = Array.from(e.results).map((r: any) => r[0].transcript).join("");
+      setQuestion(transcript);
+    };
     rec.onerror = (e: any) => {
-      setListening(false);
+      voiceMode.current = false;
       if (e?.error === "not-allowed") {
         push("assistant", "Accès au micro refusé. Autorisez le micro dans votre navigateur.");
+      }
+    };
+    rec.onend = () => {
+      setListening(false);
+      const spoken = transcript.trim();
+      if (spoken && voiceMode.current) {
+        // envoi automatique : pas besoin de cliquer sur la flèche
+        void submitRef.current(spoken, true);
+      } else {
+        voiceMode.current = false;
       }
     };
     recognitionRef.current = rec;
     rec.start();
     setListening(true);
+  };
+
+  const toggleMic = () => {
+    if (listening) {
+      voiceMode.current = false; // arrêt manuel
+      recognitionRef.current?.stop();
+      window.speechSynthesis?.cancel();
+      return;
+    }
+    voiceMode.current = true;
+    startListening();
   };
 
   const handle = async (message: string) => {
@@ -288,21 +333,36 @@ export default function AssistantChat({
     push("assistant", typeof response === "string" ? response : JSON.stringify(response, null, 2));
   };
 
-  const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    const message = question.trim();
+  const submitMessage = async (message: string, byVoice: boolean) => {
     if (!message || isLoading) return;
-    if (listening) recognitionRef.current?.stop();
     push("user", message);
     setQuestion("");
     setIsLoading(true);
     try {
       await handle(message);
+      if (byVoice) {
+        await speak(lastReply.current);
+        // Brouillon ouvert (info manquante ou confirmation attendue) → on réécoute
+        const open = Object.keys(draftRef.current).length > 0;
+        if (open && voiceMode.current) startListening();
+        else voiceMode.current = false;
+      }
     } catch {
+      voiceMode.current = false;
       push("assistant", "Je n’ai pas pu traiter la demande. Vérifiez votre connexion ou relancez-la.");
     } finally {
       setIsLoading(false);
     }
+  };
+  submitRef.current = submitMessage;
+
+  const sendMessage = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (listening) {
+      voiceMode.current = false;
+      recognitionRef.current?.stop();
+    }
+    await submitMessage(question.trim(), false);
   };
 
   return (
