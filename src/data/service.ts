@@ -2,6 +2,10 @@ import axios from "axios";
 import { Boat, User, Goods, Reservation, Trip, CashMovement, FuelConsumption } from "./type";
 
 const API = "https://saint-jude-back.onrender.com/api";
+
+// Envoie le cookie de session (sj_session) avec TOUTES les requêtes axios
+axios.defaults.withCredentials = true;
+
 export interface AuthCredentials {
   email: string;
   password: string;
@@ -69,6 +73,7 @@ export const onGetService = async <T>(endPoint: string): Promise<T[]> => {
     return [];
   }
 };
+
 // GET (one by id)
 export const onGetByIdService = async <T>(endPoint: string, id: string): Promise<T | null> => {
   try {
