@@ -1,5 +1,6 @@
 import axios from "axios";
 import type { ReservationRecord } from "../services/reservationService";
+import type { ReservationDraft, ReservationQuote } from "../components/AssistantChat";
 
 // Configuration de la base URL avec fallback production
 const API = import.meta.env.VITE_API_URL || "https://saint-jude-back.onrender.com/api";
@@ -12,6 +13,22 @@ const axiosClient = axios.create({
     "Content-Type": "application/json",
   },
 });
+
+// Erreurs lisibles : le chat affiche le message renvoyé par le backend
+// (ex. « Capacité insuffisante ») au lieu de « Request failed with status code 400 ».
+axiosClient.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    const data = error?.response?.data;
+    const message =
+      (typeof data === "string" && data) ||
+      data?.message ||
+      data?.error ||
+      (error?.code === "ERR_NETWORK" ? "serveur injoignable" : error?.message) ||
+      "erreur inconnue";
+    return Promise.reject(new Error(String(message)));
+  },
+);
 
 /* ==========================================================================
    TYPES & INTERFACES
@@ -34,8 +51,11 @@ export interface ChatPayload {
   context?: string;
 }
 
+// Devise : adaptez ce libellé à celui utilisé par formatCurrency (Tools/Tools)
+const CURRENCY_LABEL = "Ariary";
+
 export const createReservationAnnouncement = (reservation: ReservationRecord): string =>
-  `Réservation confirmée pour le client ${reservation.clientName}. Voyage de ${reservation.departure} vers ${reservation.destination}, le ${reservation.date}. Bateau ${reservation.boatName}. Passagers : ${reservation.passengers}. Marchandise : ${reservation.cargoType}, ${reservation.cargo}. Poids total : ${reservation.totalWeightKg} kilogrammes. Prix total : ${reservation.totalPrice} euros.`;
+  `Réservation confirmée pour le client ${reservation.clientName}. Voyage de ${reservation.departure} vers ${reservation.destination}, le ${reservation.date}. Bateau ${reservation.boatName}. Passagers : ${reservation.passengers}. Marchandise : ${reservation.cargoType}, ${reservation.cargo}. Poids total : ${reservation.totalWeightKg} kilogrammes. Prix total : ${reservation.totalPrice} ${CURRENCY_LABEL}.`;
 
 export interface MLPredictionPayload {
   boatId: string;
@@ -46,6 +66,30 @@ export interface WeatherPayload {
   lat: number;
   lng: number;
 }
+
+/* ==========================================================================
+   0. SERVICE RÉSERVATION (vérification, création, annulation)
+   Le backend reste l'autorité : il vérifie, calcule le prix et enregistre.
+   ⚠ Endpoints proposés : adaptez-les aux routes réelles de saint-jude-back.
+   ========================================================================== */
+
+/** Vérifie trajet + disponibilité et renvoie le prix réel (rien n'est enregistré). */
+export const verifyReservationRequest = async (draft: ReservationDraft): Promise<ReservationQuote> => {
+  const { data } = await axiosClient.post(`/reservations/verify`, draft);
+  return data;
+};
+
+/** Crée la réservation après confirmation explicite du client. */
+export const createReservationRequest = async (draft: ReservationDraft): Promise<ReservationRecord> => {
+  const { data } = await axiosClient.post(`/reservations`, draft);
+  return data;
+};
+
+/** Passe la réservation à « Annulée » (les paiements sont conservés). */
+export const cancelReservationRequest = async (reservationId: string): Promise<ReservationRecord> => {
+  const { data } = await axiosClient.post(`/reservations/${encodeURIComponent(reservationId)}/cancel`);
+  return data;
+};
 
 /* ==========================================================================
    1. SERVICE GPS & POSITIONS TEMPS RÉEL
