@@ -5,25 +5,48 @@ import type { ReservationRecord } from "../services/reservationService";
 import { formatCurrency } from "../Tools/Tools";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import {
+  DAYS,
+  GUIDED,
+  GUIDED_CHOICES,
+  correctionNote,
+  detectIntent,
+  draftRows,
+  getPoidsTotal,
+  hasInfo,
+  inferKind,
+  iso,
+  mergeDraft,
+  nextQuestion,
+  parseDate,
+  parseDateInfo,
+  formatDateLong,
+  pluralUnit,
+  strip,
+  summarize,
+  wordsToDigits,
+  type Field,
+  type RequestKind,
+  type ReservationDraft,
+  type ReservationQuote,
+} from "./reservationParser";
+
+// Les types restent importables depuis ce fichier, comme avant
+export type { ReservationDraft, ReservationQuote } from "./reservationParser";
 
 /* =========================================================
-   Utilitaires de texte
+   Utilitaires
 ========================================================= */
-const strip = (s: string) =>
-  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const newId = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 
-const iso = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+const getErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : "erreur inconnue";
 
-const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-const titleCase = (s: string) =>
-  s
-    .split(" ")
-    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
-    .join(" ");
-
-const isUpper = (s: string) => /^\p{Lu}/u.test(s);
+const nowLabel = () =>
+  new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
 /* =========================================================
    Statuts (voir la logique Saint-Jude)
@@ -66,454 +89,6 @@ function readPaymentLabel(record: ReservationRecord): string | null {
 const isCancelled = (status?: string) => strip(status ?? "").includes("annul");
 
 /* =========================================================
-   Parseur déterministe (sans IA)
-   Comprend une demande de réservation en français.
-   Aucune hallucination possible : si une info manque, on la demande.
-========================================================= */
-export interface ReservationDraft {
-  depart?: string;
-  arrivee?: string;
-  date?: string; // YYYY-MM-DD
-  passagers?: number;
-  marchandise?: string; // type : riz, ciment...
-  unite?: string; // colis, sacs...
-  quantite?: number;
-  poidsKg?: number; // poids tel que donné par le client
-  poidsMode?: "unitaire" | "total"; // le poids est-il par unité ou au total ?
-  poidsTotalKg?: number; // calculé avant l'envoi au backend
-}
-
-/** Réponse du backend avant le récapitulatif (disponibilité + prix réel). */
-export interface ReservationQuote {
-  available: boolean;
-  totalPrice?: number;
-  message?: string;
-}
-
-type Intent =
-  | "reserver"
-  | "disponibilite"
-  | "annuler"
-  | "aide"
-  | "confirmer"
-  | "refuser"
-  | "inconnu";
-
-const MONTHS = ["janvier","fevrier","mars","avril","mai","juin","juillet","aout","septembre","octobre","novembre","decembre"];
-const DAYS = ["dimanche","lundi","mardi","mercredi","jeudi","vendredi","samedi"];
-
-const UNIT_WORDS = ["sacs","sac","cartons","carton","colis","caisses","caisse","futs","fut","bidons","bidon"];
-const GOOD_WORDS = ["marchandises","marchandise","riz","ciment","meubles","meuble","motos","moto"];
-const UNITS = UNIT_WORDS.join("|");
-const GOODS = GOOD_WORDS.join("|");
-const WEIGHT_WORDS = new Set(["poids", "kg", "kilo", "kilos", "tonne", "tonnes"]);
-
-const formatDateFr = (isoDate: string) =>
-  new Date(`${isoDate}T00:00:00`).toLocaleDateString("fr-FR", {
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  });
-
-const newId = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-
-const getErrorMessage = (error: unknown) =>
-  error instanceof Error ? error.message : "erreur inconnue";
-
-const nowLabel = () =>
-  new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-
-function detectIntent(text: string): Intent {
-  const t = strip(text);
-  if (/^(oui|ok|d'accord|confirme|confirmer|valide|valider)\b/.test(t)) return "confirmer";
-  // « modifier / changer / corriger » = refuser le récapitulatif pour le corriger
-  if (/^(non|no|nope|modifier|changer|corriger)\b/.test(t)) return "refuser";
-  if (/annul/.test(t)) return "annuler";
-  if (/disponib|place|reste|libre/.test(t) && !/reserv|book/.test(t)) return "disponibilite";
-  if (/reserv|book|voyag|envoy|transport|expedi|aller|partir|trajet|billet|colis|marchandise|passager/.test(t)) {
-    return "reserver";
-  }
-  if (/aide|help|comment|que peux/.test(t)) return "aide";
-  return "inconnu";
-}
-
-function parseDate(text: string, now = new Date()): string | undefined {
-  const t = strip(text);
-  const base = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-  if (/apres[- ]demain/.test(t)) { base.setDate(base.getDate() + 2); return iso(base); }
-  if (/\bdemain\b/.test(t)) { base.setDate(base.getDate() + 1); return iso(base); }
-  if (/aujourd/.test(t)) return iso(base);
-
-  const iso1 = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
-  if (iso1) return iso1[0];
-
-  // 12/10/2026 ou 12-10 ; le point n'est accepté qu'avec l'année (12.10.2026),
-  // pour ne pas confondre un poids « 10.5 kg » avec une date
-  const num =
-    t.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/) ??
-    t.match(/\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/);
-  if (num) {
-    const y = num[3] ? (num[3].length === 2 ? 2000 + +num[3] : +num[3]) : now.getFullYear();
-    const d = new Date(y, +num[2] - 1, +num[1]);
-    if (!num[3] && d < base) d.setFullYear(y + 1);
-    return iso(d);
-  }
-
-  const txt = t.match(new RegExp(`\\b(\\d{1,2})\\s+(${MONTHS.join("|")})(?:\\s+(\\d{4}))?\\b`));
-  if (txt) {
-    const y = txt[3] ? +txt[3] : now.getFullYear();
-    const d = new Date(y, MONTHS.indexOf(txt[2]), +txt[1]);
-    if (!txt[3] && d < base) d.setFullYear(y + 1);
-    return iso(d);
-  }
-
-  const wd = t.match(new RegExp(`\\b(${DAYS.join("|")})\\b(\\s+prochain)?`));
-  if (wd) {
-    const target = DAYS.indexOf(wd[1]);
-    let diff = (target - base.getDay() + 7) % 7;
-    if (diff === 0) diff = 7;
-    base.setDate(base.getDate() + diff);
-    return iso(base);
-  }
-  return undefined;
-}
-
-/* ---------- Trajet : départ → arrivée ---------- */
-
-type Role = "depart" | "arrivee";
-type RouteDraft = Pick<ReservationDraft, "depart" | "arrivee">;
-
-// Mots qui ne sont jamais un nom de lieu
-const STOP_WORDS = new Set<string>([
-  "de","du","des","depuis","a","au","aux","vers","pour","jusqu'a","jusqua",
-  "le","la","les","l","un","une","et","ou","avec","sans","sur","dans","en","ce","cette","afin","car","que","qui",
-  "je","j","j'ai","jai","veux","voudrais","souhaite","aimerais","aller","rendre","reserver","reservation",
-  "envoyer","expedier","transporter","voyage","trajet","port","ville",
-  "svp","stp","merci","bonjour","salut","ok","oui","non","annuler",
-  "demain","apres","aujourd'hui","aujourdhui","aujourd","prochain","prochaine","soir","matin",
-  "kg","kilo","kilos","tonne","tonnes","poids","total","chaque","chacun","chacune",
-  "passager","passagers","personne","personnes","adulte","adultes",
-  ...DAYS,
-  ...MONTHS,
-  ...UNIT_WORDS,
-  ...GOOD_WORDS,
-]);
-
-const ORIGIN_MARKS = new Set(["de", "depuis"]);
-const DEST_MARKS = new Set(["a", "vers", "pour", "jusqu'a", "jusqua", "au"]);
-const SKIP_AFTER_DEST = new Set(["aller", "rendre", "a", "vers", "jusqu'a", "jusqua", "au", "le", "la", "les", "l", "port", "ville"]);
-const PLACE_NOUNS = new Set(["port", "ville"]);
-
-interface Tok {
-  raw: string; // texte d'origine (accents et majuscules conservés)
-  norm: string; // sans accents, en minuscules
-  end: boolean; // le mot termine une proposition (virgule, point...)
-}
-
-function tokenize(text: string): Tok[] {
-  const prepared = text
-    .replace(/\s*(->|→|=>)\s*/g, " → ")
-    .replace(/\b[dD]['’]\s*(?=\p{L})/gu, "de ") // d'Antananarivo → de Antananarivo
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!prepared) return [];
-
-  return prepared.split(" ").map((w) => {
-    if (w === "→") return { raw: "→", norm: "→", end: false };
-    const clean = (s: string) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
-    return {
-      raw: clean(w),
-      norm: clean(strip(w).replace(/’/g, "'")),
-      end: /[,;.!?:]$/.test(w),
-    };
-  });
-}
-
-const isStopTok = (t: Tok) => t.norm === "" || t.norm === "→" || /^\d/.test(t.norm) || STOP_WORDS.has(t.norm);
-
-// Lit un lieu (1 mot, ou 2 si le second commence par une majuscule) vers la droite
-function readPlaceForward(toks: Tok[], start: number): { name: string; next: number } | null {
-  const parts: string[] = [];
-  let i = start;
-  while (i < toks.length && parts.length < 2 && !isStopTok(toks[i])) {
-    if (parts.length === 1 && !isUpper(toks[i].raw)) break;
-    parts.push(toks[i].raw);
-    const ended = toks[i].end;
-    i++;
-    if (ended) break;
-  }
-  return parts.length ? { name: titleCase(parts.join(" ")), next: i } : null;
-}
-
-// Lit un lieu vers la gauche (utilisé avec la flèche « → »)
-function readPlaceBackward(toks: Tok[], last: number): string | null {
-  const parts: string[] = [];
-  let i = last;
-  while (i >= 0 && parts.length < 2 && !isStopTok(toks[i])) {
-    if (parts.length === 1 && (!isUpper(toks[i].raw) || toks[i].end)) break;
-    parts.unshift(toks[i].raw);
-    i--;
-  }
-  return parts.length ? titleCase(parts.join(" ")) : null;
-}
-
-// Après « à / vers / pour » : saute « aller », « le port de »... puis lit le lieu
-function readPlaceAfterDestMark(toks: Tok[], start: number): { name: string; next: number } | null {
-  let k = start;
-  while (k < toks.length) {
-    const w = toks[k].norm;
-    if (SKIP_AFTER_DEST.has(w)) { k++; continue; }
-    if ((w === "de" || w === "du") && k > 0 && PLACE_NOUNS.has(toks[k - 1].norm)) { k++; continue; }
-    break;
-  }
-  return readPlaceForward(toks, k);
-}
-
-// « 2 colis de vêtements » : ce « de » introduit une marchandise, pas un départ
-function originAllowed(toks: Tok[], i: number): boolean {
-  const prev = toks[i - 1];
-  if (!prev) return true;
-  const blocked = UNIT_WORDS.includes(prev.norm) || /^\d/.test(prev.norm) || WEIGHT_WORDS.has(prev.norm);
-  if (!blocked) return true;
-  const next = toks[i + 1];
-  return !!next && isUpper(next.raw);
-}
-
-function roleFromText(before: string): Role | undefined {
-  const b = before.replace(/\s+/g, " ").trimEnd();
-  if (/(?:^|\s)(?:de|depuis)$/.test(b) || /(?:^|\s)d'$/.test(b)) return "depart";
-  if (/(?:^|\s)(?:a|vers|pour|jusqu'a|jusqua|au)(?:\s+(?:aller|rendre))?$/.test(b)) return "arrivee";
-  return undefined;
-}
-
-function parseRoute(
-  text: string,
-  knownPlaces: string[] = [],
-  context: RouteDraft = {},
-): RouteDraft {
-  // 1) Lieux connus (ex. ports des trajets) : détection la plus fiable
-  const t = strip(text).replace(/’/g, "'").replace(/\s+/g, " ");
-  const known = knownPlaces
-    .filter(Boolean)
-    .map((place) => ({ place, key: strip(place).replace(/’/g, "'") }))
-    .filter((x) => x.key)
-    .sort((a, b) => b.key.length - a.key.length); // les noms longs d'abord
-
-  const taken: Array<[number, number]> = [];
-  const found: Array<{ place: string; index: number; role?: Role }> = [];
-  for (const { place, key } of known) {
-    const m = new RegExp(`(?:^|[^\\p{L}\\p{N}])(${escapeRegExp(key)})(?=$|[^\\p{L}\\p{N}])`, "u").exec(t);
-    if (!m) continue;
-    const index = m.index + m[0].length - m[1].length;
-    const end = index + key.length;
-    if (taken.some(([s, e]) => index < e && end > s)) continue; // chevauchement
-    taken.push([index, end]);
-    found.push({ place, index, role: roleFromText(t.slice(0, index)) });
-  }
-
-  if (found.length) {
-    found.sort((a, b) => a.index - b.index);
-    let depart = found.find((f) => f.role === "depart")?.place;
-    let arrivee = found.find((f) => f.role === "arrivee")?.place;
-    for (const f of found.filter((x) => !x.role)) {
-      if (!depart && !context.depart) depart = f.place;
-      else if (!arrivee && !context.arrivee) arrivee = f.place;
-    }
-    return { depart, arrivee };
-  }
-
-  // 2) Texte libre, sans dépendre des majuscules (utile pour la dictée vocale)
-  const toks = tokenize(text);
-
-  // 2a. « X → Y »
-  const arrow = toks.findIndex((x) => x.raw === "→");
-  if (arrow > 0) {
-    const from = readPlaceBackward(toks, arrow - 1);
-    const to = readPlaceForward(toks, arrow + 1);
-    if (from || to) return { depart: from ?? undefined, arrivee: to?.name };
-  }
-
-  // 2b. « de X à Y », « d'X vers Y », « depuis X jusqu'à Y », « de X pour aller à Y »
-  for (let i = 0; i < toks.length; i++) {
-    if (!ORIGIN_MARKS.has(toks[i].norm) || !originAllowed(toks, i)) continue;
-    const from = readPlaceForward(toks, i + 1);
-    if (!from) continue; // « de riz », « de 10 kg »... ne sont pas des lieux
-    const k = from.next;
-    if (k >= toks.length || !DEST_MARKS.has(toks[k].norm)) continue;
-    const to = readPlaceAfterDestMark(toks, k + 1);
-    if (to) return { depart: from.name, arrivee: to.name };
-  }
-
-  // 2c. Destination seule : « vers Y », « à Y », « pour aller à Y », « pour Y »
-  for (let i = 0; i < toks.length; i++) {
-    const w = toks[i].norm;
-    const isDestMark =
-      w === "vers" || w === "pour" || w === "jusqu'a" || w === "jusqua" || (w === "a" && toks[i].raw === "à");
-    if (!isDestMark) continue;
-    const to = readPlaceAfterDestMark(toks, i + 1);
-    if (to) return { arrivee: to.name };
-  }
-
-  // 2d. Départ seul : « de X », « depuis X »
-  for (let i = 0; i < toks.length; i++) {
-    if (!ORIGIN_MARKS.has(toks[i].norm) || !originAllowed(toks, i)) continue;
-    const from = readPlaceForward(toks, i + 1);
-    if (from) return { depart: from.name };
-  }
-
-  return {};
-}
-
-// Réponse courte du type « Toamasina » à la question « quel port de départ ? »
-function parseLonePlace(text: string): string | undefined {
-  const toks = tokenize(text);
-  if (toks.length === 0 || toks.length > 2) return undefined;
-  if (toks.some(isStopTok)) return undefined;
-  return titleCase(toks.map((x) => x.raw).join(" "));
-}
-
-/* ---------- Quantités, poids, marchandise ---------- */
-
-type Quantities = Pick<
-  ReservationDraft,
-  "passagers" | "poidsKg" | "marchandise" | "unite" | "quantite"
->;
-
-function parseQuantities(text: string): Quantities {
-  const t = strip(text);
-  const out: Quantities = {};
-
-  const pax = t.match(/\b(\d{1,3})\s*(personnes?|passagers?|pers\b|adultes?)/);
-  if (pax) out.passagers = +pax[1];
-
-  const kg = t.match(/\b(\d+(?:[.,]\d+)?)\s*(kg|kilos?|tonnes?|t\b)/);
-  if (kg) {
-    const v = parseFloat(kg[1].replace(",", "."));
-    out.poidsKg = /^t/.test(kg[2]) ? v * 1000 : v;
-  }
-
-  // "2 colis de riz", "20 sacs de ciment", "colis"
-  const unit = t.match(new RegExp(`\\b(\\d{1,4})?\\s*(${UNITS})\\b(?:\\s+(?:de|d')\\s*([a-z]+))?`));
-  if (unit) {
-    if (unit[1]) out.quantite = +unit[1];
-    out.unite = unit[2];
-    if (unit[3]) out.marchandise = unit[3];
-  }
-
-  if (!out.marchandise) {
-    const goods = t.match(new RegExp(`\\b(${GOODS})\\b`));
-    if (goods) out.marchandise = goods[1];
-  }
-  return out;
-}
-
-// Le poids donné est-il par unité ("10 kg par colis") ou au total ?
-function parseWeightMode(text: string): ReservationDraft["poidsMode"] {
-  const t = strip(text);
-  if (
-    /\bpar\s+(colis|sac|carton|caisse|fut|bidon|piece|unite)|\bchacun|\bchacune|\bchaque\b|l'unite|\bunitaire\b|\bindividuel/.test(
-      t,
-    )
-  ) {
-    return "unitaire";
-  }
-  if (/au total|poids total|\btotal\b|en tout|\bensemble\b|\bglobal/.test(t)) return "total";
-  return undefined;
-}
-
-function mergeDraft(prev: ReservationDraft, text: string, knownPlaces: string[] = []): ReservationDraft {
-  const route = parseRoute(text, knownPlaces, { depart: prev.depart, arrivee: prev.arrivee });
-  const q = parseQuantities(text);
-  const date = parseDate(text);
-  const mode = parseWeightMode(text);
-  const next: ReservationDraft = { ...prev };
-
-  if (route.depart) next.depart = route.depart;
-  if (route.arrivee) next.arrivee = route.arrivee;
-
-  // Réponse d'un seul mot (« Toamasina ») quand il ne manque que le départ ou l'arrivée
-  if (!route.depart && !route.arrivee && !date && !mode && Object.keys(q).length === 0) {
-    const lone = parseLonePlace(text);
-    if (lone) {
-      if (!prev.depart && prev.arrivee) next.depart = lone;
-      else if (prev.depart && !prev.arrivee) next.arrivee = lone;
-    }
-  }
-
-  if (date) next.date = date;
-  if (q.passagers !== undefined) next.passagers = q.passagers;
-  if (q.marchandise) next.marchandise = q.marchandise;
-  if (q.unite) next.unite = q.unite;
-  if (q.quantite !== undefined) next.quantite = q.quantite;
-  if (q.poidsKg !== undefined) {
-    next.poidsKg = q.poidsKg;
-    // nouveau poids sans précision → on redemandera s'il est par unité ou total
-    next.poidsMode = mode;
-  } else if (mode) {
-    next.poidsMode = mode;
-  }
-  return next;
-}
-
-// Poids total réel (undefined tant que l'ambiguïté « par colis / total » n'est pas levée)
-function getPoidsTotal(d: ReservationDraft): number | undefined {
-  if (d.poidsKg === undefined) return undefined;
-  if (d.quantite && d.quantite > 1) {
-    if (d.poidsMode === "unitaire") return d.poidsKg * d.quantite;
-    if (d.poidsMode === "total") return d.poidsKg;
-    return undefined;
-  }
-  return d.poidsKg;
-}
-
-const needsWeightClarification = (d: ReservationDraft) =>
-  !!d.quantite && d.quantite > 1 && d.poidsKg !== undefined && !d.poidsMode;
-
-type RequestKind = "passager" | "marchandise";
-
-function missingFields(d: ReservationDraft, kind: RequestKind | null = null): string[] {
-  const miss: string[] = [];
-  if (!d.depart) miss.push("le port de départ");
-  if (!d.arrivee) miss.push("la destination");
-  if (!d.date) miss.push("la date");
-
-  const hasGoods = !!(d.marchandise || d.quantite || d.poidsKg);
-  if (!d.passagers && !hasGoods) {
-    if (kind === "passager") miss.push("le nombre de passagers");
-    else if (kind === "marchandise") miss.push("la marchandise (type, quantité, poids)");
-    else miss.push("les passagers ou la marchandise (type, quantité, poids)");
-  } else if (hasGoods) {
-    if (!d.marchandise && !d.unite) miss.push("le type de marchandise");
-    if (!d.quantite) miss.push("la quantité");
-    if (d.poidsKg === undefined) miss.push("le poids");
-  }
-  return miss;
-}
-
-/** Lignes lisibles du brouillon (utilisées pour le texte et pour la carte récapitulatif). */
-function draftRows(d: ReservationDraft): Array<[string, string]> {
-  const rows: Array<[string, string]> = [
-    ["Trajet", `${d.depart ?? "?"} → ${d.arrivee ?? "?"}`],
-    ["Date", d.date ? formatDateFr(d.date) : "?"],
-  ];
-  if (d.passagers) rows.push(["Passagers", String(d.passagers)]);
-  if (d.marchandise || d.unite) rows.push(["Marchandise", d.marchandise ?? d.unite ?? ""]);
-  if (d.quantite) rows.push(["Quantité", `${d.quantite}${d.unite ? ` ${d.unite}` : ""}`]);
-  const total = getPoidsTotal(d);
-  if (total !== undefined) rows.push(["Poids total", `${total} kg`]);
-  return rows;
-}
-
-function summarize(d: ReservationDraft): string {
-  return draftRows(d)
-    .map(([label, value]) => `• ${label} : ${value}`)
-    .join("\n");
-}
-
-/* =========================================================
    Composant
 ========================================================= */
 export interface AssistantChatProps {
@@ -524,7 +99,7 @@ export interface AssistantChatProps {
   onReservationUpdated?: (reservation: ReservationRecord) => void;
   /** Ports / destinations connus (ex: noms des trajets) pour une détection fiable. */
   knownPlaces?: string[];
-  /** Backend : vérifie le trajet, la disponibilité et calcule le prix réel (avant le récapitulatif). */
+  /** Backend : vérifie trajet, capacité et tarif réels (avant le récapitulatif). */
   verifyReservation?: (draft: ReservationDraft) => Promise<ReservationQuote>;
   /** Backend : crée vraiment la réservation et détermine ses statuts. */
   createReservation?: (draft: ReservationDraft) => Promise<ReservationRecord>;
@@ -557,20 +132,11 @@ interface PushOptions {
 }
 
 const HELP =
-  "Je peux préparer une réservation. Exemple : « Réserver 2 colis de riz de 10 kg d’Antananarivo à Mahajanga le 12 octobre 2026 ». Je vous demande ce qui manque, je vous présente un récapitulatif, puis vous confirmez. La réservation n’est enregistrée qu’après validation par le système.";
+  "Je peux préparer une réservation : dites-moi librement ce que vous souhaitez (billet passager ou envoi de marchandises, ports, date, quantité, poids), dans l’ordre que vous voulez. Je vous demande seulement ce qui manque, une information à la fois, puis je vérifie le trajet, la capacité et le tarif, et je vous présente un récapitulatif. La réservation n’est enregistrée qu’après votre confirmation et la validation par le système.";
 
-// Démarrage guidé : aucune valeur imposée, c'est le client qui donne ses informations
-const GUIDED: Record<string, RequestKind> = {
-  "Billet passager": "passager",
-  "Transport de marchandises": "marchandise",
-};
-const GUIDED_CHOICES = Object.keys(GUIDED);
-
-// Simple exemple de formulation (non cliquable) : les vraies valeurs viennent du client
+// Aucune valeur imposée : le client choisit sa marchandise, ses ports, sa quantité...
 const EXAMPLE_HINT =
-  "Exemple de formulation (à adapter à votre demande) : « Réserver 2 colis de riz de 10 kg d’Antananarivo à Mahajanga demain ».";
-
-const hasInfo = (d: ReservationDraft) => Object.values(d).some((v) => v !== undefined);
+  "Parlez librement : dites ce que vous voulez envoyer, d’où, vers où, la quantité, le poids et la date, dans l’ordre que vous voulez. Je vous demanderai seulement ce qui manque.";
 
 export default function AssistantChat({
   reservation,
@@ -589,9 +155,11 @@ export default function AssistantChat({
   const draftRef = useRef<ReservationDraft>({});
   const collecting = useRef(false); // une demande de réservation est en cours de collecte
   const awaitingConfirm = useRef(false); // récapitulatif présenté, attente de « oui »
-  const awaitingWeight = useRef(false); // question « poids par colis ou total ? » posée
+  const awaitingWeight = useRef(false); // question « poids par unité ou total ? » posée
+  const pendingDate = useRef(false); // date relative ambiguë en attente de confirmation
+  const asked = useRef<Field | null>(null); // dernière question posée (pour les réponses courtes)
   const pendingCancel = useRef<ReservationRecord | null>(null); // annulation d'une réservation existante
-  const requestKind = useRef<RequestKind | null>(null); // type de demande choisi (passager / marchandise)
+  const requestKind = useRef<RequestKind | null>(null); // type de demande (passager / marchandise)
   const recognitionRef = useRef<any>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastReply = useRef("");
@@ -618,33 +186,16 @@ export default function AssistantChat({
     setMessages((c) => [...c, { id: newId(), role, content, time: nowLabel(), ...options }]);
   };
 
-  const hasDraft = () => Object.values(draftRef.current).some((v) => v !== undefined);
+  const hasDraft = () => hasInfo(draftRef.current);
 
   const resetDraft = () => {
     draftRef.current = {};
     collecting.current = false;
     awaitingConfirm.current = false;
     awaitingWeight.current = false;
+    pendingDate.current = false;
+    asked.current = null;
     requestKind.current = null;
-  };
-
-  // Démarrage guidé : l'assistant pose la question, le client donne ses propres valeurs
-  const startGuided = (kind: RequestKind) => {
-    draftRef.current = {};
-    awaitingConfirm.current = false;
-    awaitingWeight.current = false;
-    requestKind.current = kind;
-    collecting.current = true;
-    if (kind === "passager") {
-      return push(
-        "assistant",
-        "Très bien, réservons un billet passager. Indiquez-moi votre port de départ, votre destination, la date du voyage et le nombre de passagers.\nVous pouvez tout dire en une phrase ou répondre étape par étape.",
-      );
-    }
-    return push(
-      "assistant",
-      "Très bien, préparons un transport de marchandises. Indiquez-moi le type de marchandise, la quantité, le poids, le port de départ, la destination et la date.\nVous pouvez tout dire en une phrase ou répondre étape par étape.",
-    );
   };
 
   // Lecture vocale de la réponse (retourne quand la phrase est terminée)
@@ -709,8 +260,9 @@ export default function AssistantChat({
     startListening();
   };
 
-  // Étape 3-4 : le backend vérifie, puis l'assistant présente le récapitulatif
+  // Le backend vérifie trajet, capacité et tarif ; puis l'assistant présente le récapitulatif
   const presentRecap = async () => {
+    asked.current = null;
     const draft = draftRef.current;
     const payload: ReservationDraft = { ...draft, poidsTotalKg: getPoidsTotal(draft) };
 
@@ -751,34 +303,55 @@ export default function AssistantChat({
     );
   };
 
-  // Suite de la collecte : champs manquants → ambiguïté du poids → récapitulatif
-  const continueCollecting = async (merged: ReservationDraft) => {
+  // Suite de la collecte : UNE question ciblée à la fois, puis vérification backend et récapitulatif
+  const continueCollecting = async (merged: ReservationDraft, prefix = "") => {
     awaitingWeight.current = false;
     draftRef.current = merged;
+    if (!requestKind.current) requestKind.current = inferKind(merged);
 
-    const miss = missingFields(merged, requestKind.current);
-    if (miss.length) {
+    const q = nextQuestion(merged, requestKind.current);
+    if (q) {
       awaitingConfirm.current = false;
-      const intro = hasInfo(merged) ? `${summarize(merged)}\n\n` : "";
-      return push("assistant", `${intro}Il me manque : ${miss.join(", ")}.`);
+      asked.current = q.field;
+      awaitingWeight.current = q.field === "poidsMode";
+      return push("assistant", `${prefix}${q.text}`, q.choices ? { choices: q.choices } : {});
     }
 
-    // Ambiguïté « poids par unité » ou « poids total » à lever avant le récapitulatif
-    if (needsWeightClarification(merged)) {
-      awaitingConfirm.current = false;
-      awaitingWeight.current = true;
-      const unit = merged.unite ?? "colis";
-      return push(
+    // Tout est connu : on annonce, puis le backend vérifie avant tout résultat
+    asked.current = null;
+    if (verifyReservation) {
+      const total = getPoidsTotal(merged);
+      const what =
+        total !== undefined
+          ? `, ainsi que le tarif correspondant à vos ${total} kg`
+          : merged.passagers
+            ? `, ainsi que le tarif pour ${merged.passagers} passager${merged.passagers > 1 ? "s" : ""}`
+            : "";
+      push(
         "assistant",
-        `Les ${merged.poidsKg} kg correspondent-ils au poids de chaque ${unit} ou au poids total des ${merged.quantite} ${unit} ?`,
-        { choices: [`Chaque ${unit}`, "Poids total"] },
+        `${prefix}Très bien, ${formatDateLong(merged.date!)}. Je vais vérifier les possibilités de transport entre ${merged.depart} et ${merged.arrivee} pour cette date${what}.`,
       );
+    } else if (prefix) {
+      push("assistant", prefix.trim());
     }
-
     return presentRecap();
   };
 
-  // Étape 5 : création par le backend. L'IA ne dit « enregistrée » qu'après sa réponse.
+  // Démarrage guidé : on garde ce que le client a déjà dit, on pose la question suivante
+  const startGuided = (kind: RequestKind) => {
+    requestKind.current = kind;
+    collecting.current = true;
+    awaitingConfirm.current = false;
+    awaitingWeight.current = false;
+    pendingDate.current = false;
+    const prefix =
+      kind === "passager"
+        ? "Très bien, réservons un billet passager. "
+        : "Très bien, préparons un transport de marchandises. ";
+    return continueCollecting(draftRef.current, prefix);
+  };
+
+  // Création par le backend. L'IA ne dit « enregistrée » qu'après sa réponse.
   const createFromDraft = async () => {
     if (!createReservation) {
       return push(
@@ -866,24 +439,35 @@ export default function AssistantChat({
       });
     }
 
-    // A'. Réponse à « poids par colis ou poids total ? »
+    // A'. Réponse à « Parlez-vous de vendredi 16 octobre ? » (date relative ambiguë)
+    if (pendingDate.current) {
+      pendingDate.current = false;
+      if (intent === "confirmer") return continueCollecting(draftRef.current);
+      if (intent === "refuser" && !parseDate(wordsToDigits(message))) {
+        const d = { ...draftRef.current };
+        delete d.date;
+        return continueCollecting(d); // redemande la date
+      }
+      // sinon (« non, aujourd’hui », « samedi »...) : traité comme une correction plus bas
+    }
+
+    // A''. Réponse à « poids de chaque unité ou poids total ? »
     // Un simple « oui » ne répond pas à une question à deux choix : on la repose clairement.
     if (awaitingWeight.current && intent !== "annuler" && intent !== "aide") {
-      const mode = parseWeightMode(message);
       const draft = draftRef.current;
-      const unit = draft.unite ?? "colis";
-      if (mode) {
-        return continueCollecting({ ...draft, poidsMode: mode });
+      const unit = draft.unite ?? "unité";
+      const merged = mergeDraft(draft, message, knownPlaces, "poidsMode");
+      if (merged.poidsMode || merged.poidsKg !== draft.poidsKg) {
+        return continueCollecting(merged, correctionNote(draft, merged));
       }
       if (intent === "confirmer" || intent === "refuser") {
         return push(
           "assistant",
-          `« ${intent === "confirmer" ? "Oui" : "Non"} » ne me permet pas de choisir : il y a deux possibilités.\n• Chaque ${unit} pèse ${draft.poidsKg} kg\n• Les ${draft.quantite} ${unit} pèsent ${draft.poidsKg} kg au total\nLequel est correct ?`,
+          `« ${intent === "confirmer" ? "Oui" : "Non"} » ne me permet pas de choisir : il y a deux possibilités.\n• Chaque ${unit} pèse ${draft.poidsKg} kg\n• Les ${draft.quantite} ${pluralUnit(unit, draft.quantite ?? 2)} pèsent ${draft.poidsKg} kg au total\nLequel est correct ?`,
           { choices: [`Chaque ${unit}`, "Poids total"] },
         );
       }
-      // Le client donne une autre information (nouveau poids, date...) : on la fusionne
-      // plus bas ; si le poids change, la question sera reposée automatiquement.
+      // autre information (date, port...) : fusionnée plus bas ; la question sera reposée
     }
 
     if (intent === "aide") return push("assistant", HELP);
@@ -893,12 +477,18 @@ export default function AssistantChat({
       return createFromDraft();
     }
 
-    // C. Le client refuse le récapitulatif : il peut corriger ou annuler
+    // C. Le client refuse le récapitulatif : correction directe, sans tout redemander
     if (awaitingConfirm.current && intent === "refuser") {
+      const before = draftRef.current;
+      const merged = mergeDraft(before, message, knownPlaces, null);
+      const note = correctionNote(before, merged);
       awaitingConfirm.current = false;
-      return push("assistant", "Que souhaitez-vous modifier ? Indiquez la nouvelle information (date, trajet, quantité, poids...) ou dites « annuler ».", {
-        choices: ["Annuler"],
-      });
+      if (note) return continueCollecting(merged, note);
+      return push(
+        "assistant",
+        "Que souhaitez-vous modifier ? Indiquez la nouvelle information (date, trajet, quantité, poids...) ou dites « annuler ».",
+        { choices: ["Annuler"] },
+      );
     }
 
     // D. Annulation
@@ -932,16 +522,19 @@ export default function AssistantChat({
       );
     }
 
-    // E. Collecte des informations (nouvelle réservation ou compléments)
+    // E. Collecte : le client parle librement, on extrait tout ce qu'il donne
     if (intent === "reserver") collecting.current = true;
     if (collecting.current || (hasDraft() && intent !== "disponibilite")) {
       collecting.current = true;
-      const merged = mergeDraft(draftRef.current, message, knownPlaces);
 
-      // Réponse « 3 » à la question sur le nombre de passagers
-      if (requestKind.current === "passager" && !merged.passagers && /^\d{1,3}$/.test(message.trim())) {
-        merged.passagers = Number(message.trim());
+      if (!requestKind.current) {
+        const s = strip(message);
+        if (/envoy|expedi|colis|marchandise|fret/.test(s)) requestKind.current = "marchandise";
+        else if (/billet|passager/.test(s)) requestKind.current = "passager";
       }
+
+      const before = draftRef.current;
+      const merged = mergeDraft(before, message, knownPlaces, asked.current);
 
       // Une date passée est refusée
       if (merged.date && merged.date < iso(new Date())) {
@@ -949,10 +542,25 @@ export default function AssistantChat({
         draftRef.current = merged;
         awaitingConfirm.current = false;
         awaitingWeight.current = false;
+        asked.current = "date";
         return push("assistant", `${summarize(merged)}\n\nLa date indiquée est déjà passée. Quelle est la date du voyage ?`);
       }
 
-      return continueCollecting(merged);
+      // Date relative ambiguë (« vendredi » dit un vendredi) → confirmation
+      const info = parseDateInfo(wordsToDigits(message));
+      if (merged.date && merged.date !== before.date && info?.ambiguous) {
+        draftRef.current = merged;
+        pendingDate.current = true;
+        awaitingConfirm.current = false;
+        awaitingWeight.current = false;
+        return push(
+          "assistant",
+          `Aujourd’hui, c’est déjà ${DAYS[new Date().getDay()]}. Parlez-vous de ${formatDateLong(merged.date)} ?`,
+          { choices: ["Oui", "Non, aujourd’hui"] },
+        );
+      }
+
+      return continueCollecting(merged, correctionNote(before, merged));
     }
 
     // F. Questions ouvertes (disponibilité, explications) → service IA, avec contexte
@@ -1144,7 +752,7 @@ export default function AssistantChat({
           <input
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={listening ? "Je vous écoute…" : "Décrivez votre trajet, la date et ce que vous transportez…"}
+            placeholder={listening ? "Je vous écoute…" : "Écrivez votre demande avec vos propres mots…"}
             aria-label="Message pour l’IA"
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
