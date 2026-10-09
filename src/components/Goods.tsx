@@ -72,13 +72,18 @@ const configPaiement: Record<EtatPaiement, { libelle: string; classe: string }> 
 };
 
 /* =========================
-   Statut affiché : payée en totalité + en attente → Confirmée
+   Statut affiché (déduit du paiement) :
+   - Annulée / Refusée / Absent / Terminée → gardent leur statut
+   - Payé en totalité                      → Confirmée
+   - Partiellement payé ou Crédit          → En attente
    (affichage uniquement, la base n'est pas modifiée)
 ========================= */
 const getStatutAffiche = (reservation: Reservation): StatutReservation => {
   const statutBrut = normaliserStatut(reservation.status as string | undefined);
-  if (statutBrut === 'EN_ATTENTE' && getEtatPaiement(reservation) === 'PAYE') return 'CONFIRMEE';
-  return statutBrut;
+
+  if (statutBrut !== 'EN_ATTENTE' && statutBrut !== 'CONFIRMEE') return statutBrut;
+
+  return getEtatPaiement(reservation) === 'PAYE' ? 'CONFIRMEE' : 'EN_ATTENTE';
 };
 
 const MarchandiseManagementPage = () => {
@@ -95,12 +100,18 @@ const MarchandiseManagementPage = () => {
   const allGoods = useSelector((state: RootState) => state.stJude.goods);
   const alltrip = useSelector((state: RootState) => state.stJude.trip);
 
-  // Nom du caissier : liste des utilisateurs, sinon l'utilisateur connecté, sinon "Inconnu"
+  // Nom du caissier : comparaison des identifiants en texte (évite les écarts nombre/texte
+  // ou espaces), puis utilisateur connecté, sinon "Inconnu"
   const getNomCaissier = (userId: string) => {
+    const id = String(userId ?? '').trim();
+    if (!id) return 'Inconnu';
+
     const user =
-      allUser.find((candidat) => candidat.id === userId) ??
-      (currentUser && currentUser.id === userId ? currentUser : undefined);
-    return user ? `${user.name} ${user.lastName}` : 'Inconnu';
+      allUser.find((candidat) => String(candidat.id).trim() === id) ??
+      (currentUser && String(currentUser.id).trim() === id ? currentUser : undefined);
+
+    const nom = user ? `${user.name ?? ''} ${user.lastName ?? ''}`.trim() : '';
+    return nom || 'Inconnu';
   };
 
   const filteredReservations = allReservation.filter((reservation) => {
@@ -120,17 +131,15 @@ const MarchandiseManagementPage = () => {
     if (statusFilter === 'partial' && etatPaiement !== 'PARTIEL') return false;
     if (statusFilter === 'credit' && etatPaiement !== 'CREDIT') return false;
 
-    // 2. Recherche (client, destinataire, ID, utilisateur, trajet)
+    // 2. Recherche (expéditeur, destinataire, ID, caissier, trajet)
     const search = searchTerm.toLowerCase();
-    const user = findUser(reservation.userId, allUser);
     const trip = findTrip(reservation.tripId, alltrip);
 
     return (
       (reservation.clientName ?? '').toLowerCase().includes(search) ||
       (reservation.destName ?? '').toLowerCase().includes(search) ||
       (reservation.id ?? '').toLowerCase().includes(search) ||
-      (user?.name ?? '').toLowerCase().includes(search) ||
-      (user?.lastName ?? '').toLowerCase().includes(search) ||
+      getNomCaissier(reservation.userId).toLowerCase().includes(search) ||
       (trip?.from ?? '').toLowerCase().includes(search) ||
       (trip?.to ?? '').toLowerCase().includes(search)
     );
@@ -172,7 +181,7 @@ const MarchandiseManagementPage = () => {
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input
-                    placeholder="Rechercher par expéditeur, destinataire ou ID..."
+                    placeholder="Rechercher par expéditeur, destinataire, caissier ou ID..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                     className="pl-10"
