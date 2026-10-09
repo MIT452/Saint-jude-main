@@ -4,10 +4,10 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Plus, Search, Filter, Package } from 'lucide-react';
+import { Plus, Search, Filter, Package, X } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux';
-import { findBoat, findTrip, findUser, formatCityName, formatCurrency } from '../Tools/Tools';
+import { findBoat, findTrip, formatCityName, formatCurrency } from '../Tools/Tools';
 import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
@@ -86,6 +86,115 @@ const getStatutAffiche = (reservation: Reservation): StatutReservation => {
   return getEtatPaiement(reservation) === 'PAYE' ? 'CONFIRMEE' : 'EN_ATTENTE';
 };
 
+/* =========================
+   Enregistrement d'un paiement supplémentaire
+   >>> À BRANCHER sur votre API / action Redux existante <<<
+   Il faut mettre à jour la réservation avec :
+     amountPaid  = ancien montant payé + montant
+     amountToPay = total - nouveau montant payé
+   et NE PAS modifier userId (le caissier d'origine).
+========================= */
+const enregistrerPaiement = async (reservation: Reservation, montant: number): Promise<void> => {
+  const nouveauPaye = (Number(reservation.amountPaid) || 0) + montant;
+  const nouveauReste = Math.max((Number(reservation.totalPrice) || 0) - nouveauPaye, 0);
+
+  // TODO : remplacer cette ligne par l'appel réel (fetch / dispatch) avec
+  // { id: reservation.id, amountPaid: nouveauPaye, amountToPay: nouveauReste }
+  throw new Error(`Enregistrement non branché (nouveau payé : ${nouveauPaye}, reste : ${nouveauReste})`);
+};
+
+/* =========================
+   Fenêtre « Ajouter un paiement »
+========================= */
+type PaiementModalProps = {
+  reservation: Reservation;
+  onClose: () => void;
+};
+
+const PaiementModal = ({ reservation, onClose }: PaiementModalProps) => {
+  const [montant, setMontant] = useState('');
+  const [erreur, setErreur] = useState('');
+  const [enCours, setEnCours] = useState(false);
+
+  const total = Number(reservation.totalPrice) || 0;
+  const paye = Number(reservation.amountPaid) || 0;
+  const reste = Math.max(total - paye, 0);
+
+  const valider = async () => {
+    const valeur = Number(montant);
+    if (!valeur || valeur <= 0) {
+      setErreur('Entrez un montant supérieur à 0.');
+      return;
+    }
+    if (valeur > reste) {
+      setErreur(`Le montant dépasse le reste à payer (${formatCurrency(reste)}).`);
+      return;
+    }
+    try {
+      setEnCours(true);
+      setErreur('');
+      await enregistrerPaiement(reservation, valeur);
+      onClose();
+    } catch (e) {
+      setErreur(e instanceof Error ? e.message : "Erreur lors de l'enregistrement du paiement.");
+    } finally {
+      setEnCours(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
+      <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-[#001F3F]">Ajouter un paiement</CardTitle>
+          <Button variant="ghost" size="sm" onClick={onClose}>
+            <X className="h-4 w-4" />
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="text-sm space-y-1">
+            <p>
+              <span className="text-gray-500">Expéditeur :</span> {reservation.clientName}
+            </p>
+            <p>
+              <span className="text-gray-500">Prix total :</span> {formatCurrency(total)}
+            </p>
+            <p>
+              <span className="text-gray-500">Déjà payé :</span> {formatCurrency(paye)}
+            </p>
+            <p className="font-medium">
+              <span className="text-gray-500 font-normal">Reste à payer :</span> {formatCurrency(reste)}
+            </p>
+          </div>
+
+          <div>
+            <label className="text-sm text-gray-600 mb-1 block">Montant du paiement (Ar)</label>
+            <Input
+              type="number"
+              min={1}
+              max={reste}
+              value={montant}
+              onChange={(e) => setMontant(e.target.value)}
+              placeholder={`Maximum ${reste}`}
+            />
+          </div>
+
+          {erreur && <p className="text-sm text-red-600">{erreur}</p>}
+
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={onClose} disabled={enCours}>
+              Annuler
+            </Button>
+            <Button onClick={valider} disabled={enCours}>
+              {enCours ? 'Enregistrement...' : 'Valider le paiement'}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
 const MarchandiseManagementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -94,17 +203,19 @@ const MarchandiseManagementPage = () => {
   const [showDetailGoodsModal, setShowDetailGoodsModal] = useState(false);
   const [currentGoods, setCurrentGoods] = useState<Goods[]>([]);
   const [currentReservation, setCurrentReservation] = useState<Reservation>(reservationVoid);
+  const [reservationPaiement, setReservationPaiement] = useState<Reservation | null>(null);
 
   const { allUser, currentUser } = useSelector((state: RootState) => state.users);
   const { reservation: allReservation, boat: allBoat } = useSelector((state: RootState) => state.stJude);
   const allGoods = useSelector((state: RootState) => state.stJude.goods);
   const alltrip = useSelector((state: RootState) => state.stJude.trip);
 
-  // Nom du caissier : comparaison des identifiants en texte (évite les écarts nombre/texte
-  // ou espaces), puis utilisateur connecté, sinon "Inconnu"
-  const getNomCaissier = (userId: string) => {
+  // Nom du caissier :
+  // - userId vide                      → "Non attribué" (réservation sans caissier)
+  // - userId introuvable dans la liste → "Inconnu"
+  const getNomCaissier = (userId?: string) => {
     const id = String(userId ?? '').trim();
-    if (!id) return 'Inconnu';
+    if (!id) return 'Non attribué';
 
     const user =
       allUser.find((candidat) => String(candidat.id).trim() === id) ??
@@ -231,6 +342,7 @@ const MarchandiseManagementPage = () => {
                     <TableHead className="text-right">Montant restant</TableHead>
                     <TableHead className="text-center">Paiement</TableHead>
                     <TableHead className="text-center">Statut</TableHead>
+                    <TableHead className="text-center">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -264,9 +376,16 @@ const MarchandiseManagementPage = () => {
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.amountToPay)}</TableCell>
                         <TableCell className="text-center">
                           {paiement ? (
-                            <Badge variant="secondary" className={paiement.classe}>
-                              {paiement.libelle}
-                            </Badge>
+                            <div className="flex flex-col items-center gap-1">
+                              <Badge variant="secondary" className={paiement.classe}>
+                                {paiement.libelle}
+                              </Badge>
+                              {etatPaiement === 'PARTIEL' && (
+                                <span className="text-xs text-gray-500">
+                                  Reste : {formatCurrency(reservation.amountToPay)}
+                                </span>
+                              )}
+                            </div>
                           ) : (
                             <span className="text-gray-400">—</span>
                           )}
@@ -275,6 +394,24 @@ const MarchandiseManagementPage = () => {
                           <Badge variant="secondary" className={statut.classe}>
                             {statut.libelle}
                           </Badge>
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {etatPaiement === 'PARTIEL' || etatPaiement === 'CREDIT' ? (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={(e) => {
+                                e.stopPropagation(); // n'ouvre pas le détail de la ligne
+                                setReservationPaiement(reservation);
+                              }}
+                            >
+                              Ajouter un paiement
+                            </Button>
+                          ) : etatPaiement === 'PAYE' ? (
+                            <span className="text-sm text-green-700">Soldé</span>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
                         </TableCell>
                       </TableRow>
                     );
@@ -302,6 +439,9 @@ const MarchandiseManagementPage = () => {
       )}
       {showAddGoodsModal && (
         <ReservationForm onClose={() => setShowAddGoodsModal(false)} idReservation={idReservation} />
+      )}
+      {reservationPaiement && (
+        <PaiementModal reservation={reservationPaiement} onClose={() => setReservationPaiement(null)} />
       )}
     </div>
   );
