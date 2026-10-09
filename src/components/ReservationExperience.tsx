@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSelector } from "react-redux";
 import {
   BellRing,
@@ -24,6 +24,7 @@ import {
   type NotificationChannel,
   type ReservationRecord,
 } from "../services/reservationService";
+import { formatCurrency } from "../Tools/Tools";
 import AssistantChat from "./AssistantChat";
 import PassengerReservation from "./PassengerReservation";
 import { Badge } from "./ui/badge";
@@ -46,15 +47,27 @@ const tabs = [
 
 type Tab = (typeof tabs)[number]["id"];
 
-const formatCurrency = (value: number) =>
-  new Intl.NumberFormat("fr-FR", {
-    style: "currency",
-    currency: "EUR",
-    maximumFractionDigits: 0,
-  }).format(value);
+/* =========================
+   Utilitaires
+   Les montants sont affichés en Ar via formatCurrency (Tools/Tools),
+   comme sur la page Gestion des Marchandises.
+========================= */
+
+// Normalise un statut (sans accent, en minuscules) pour comparer sans risque d'écart
+const normaliserTexte = (valeur?: string) =>
+  (valeur ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+
+const estConfirmee = (statut?: string) => normaliserTexte(statut).includes("confirm");
+const estAnnulee = (statut?: string) => {
+  const valeur = normaliserTexte(statut);
+  return valeur.includes("annul") || valeur.includes("refus");
+};
 
 // Le nom exact du champ date dépend de ReservationRecord : on essaie les plus courants.
-// Si tu connais le vrai nom, remplace cette fonction par `reservation.tonChamp`.
+// Si vous connaissez le vrai nom, remplacez cette fonction par `reservation.tonChamp`.
 const getReservationDate = (reservation: ReservationRecord): string => {
   const record = reservation as unknown as Record<string, unknown>;
   const raw =
@@ -82,16 +95,16 @@ export default function ReservationExperience() {
   const [search, setSearch] = useState("");
   const [channel, setChannel] = useState<NotificationChannel>("whatsapp");
   const [isLoading, setIsLoading] = useState(false);
+  const [isConfirming, setIsConfirming] = useState(false);
 
-  const visibleReservations = useMemo(
-    () =>
-      reservations.filter((reservation) =>
-        `${reservation.clientName} ${reservation.cargo} ${reservation.destination} ${reservation.departure} ${reservation.boatName}`
-          .toLowerCase()
-          .includes(search.toLowerCase())
-      ),
-    [reservations, search]
-  );
+  const visibleReservations = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return reservations.filter((reservation) =>
+      `${reservation.clientName} ${reservation.clientPhone} ${reservation.cargo} ${reservation.destination} ${reservation.departure} ${reservation.boatName}`
+        .toLowerCase()
+        .includes(term)
+    );
+  }, [reservations, search]);
 
   const refreshReservations = async () => {
     setIsLoading(true);
@@ -110,6 +123,13 @@ export default function ReservationExperience() {
     void refreshReservations();
   }, []);
 
+  // Garde la réservation sélectionnée à jour après chaque actualisation de la liste
+  useEffect(() => {
+    setSelectedReservation((current) =>
+      current ? reservations.find((item) => item.id === current.id) ?? current : current
+    );
+  }, [reservations]);
+
   const handleAdd = async (reservation: ReservationRecord) => {
     setErrorStatus("");
     try {
@@ -123,9 +143,10 @@ export default function ReservationExperience() {
   };
 
   const handleConfirm = async () => {
-    if (!selectedReservation) return;
+    if (!selectedReservation || isConfirming) return;
     setErrorStatus("");
     setVoiceStatus("");
+    setIsConfirming(true);
 
     // 1) Étape principale : changer le statut (appel back inchangé)
     let finalized: ReservationRecord;
@@ -133,12 +154,14 @@ export default function ReservationExperience() {
       finalized = await updateReservationStatus(selectedReservation.id, "Confirmée");
     } catch (error) {
       setErrorStatus(`Échec de la confirmation de la réservation : ${getErrorMessage(error)}`);
+      setIsConfirming(false);
       return;
     }
 
     setReservations((current) => current.map((item) => (item.id === finalized.id ? finalized : item)));
     setSelectedReservation(finalized);
     setStatus(`Réservation confirmée : ${finalized.clientName}.`);
+    setIsConfirming(false);
 
     // 2) Étape secondaire : annonce vocale (ne doit jamais casser la confirmation)
     const announcement = createReservationAnnouncement(finalized);
@@ -165,20 +188,34 @@ export default function ReservationExperience() {
   };
 
   const sendNotification = (reservation: ReservationRecord) => {
+    setErrorStatus("");
+
+    if (channel === "none") {
+      setErrorStatus("Aucun canal sélectionné : choisissez WhatsApp ou e-mail.");
+      return;
+    }
+
     const message = encodeURIComponent(
       `Bonjour ${reservation.clientName}, votre réservation pour ${reservation.departure} → ${reservation.destination} est confirmée.`
     );
+
     if (channel === "whatsapp" || channel === "both") {
-      window.open(
-        `https://wa.me/${reservation.clientPhone.replace(/[^0-9]/g, "")}?text=${message}`,
-        "_blank",
-        "noopener,noreferrer"
-      );
+      const phone = (reservation.clientPhone ?? "").replace(/[^0-9]/g, "");
+      if (phone) {
+        window.open(`https://wa.me/${phone}?text=${message}`, "_blank", "noopener,noreferrer");
+      } else {
+        setErrorStatus("Numéro de téléphone manquant pour l’envoi WhatsApp.");
+      }
     }
+
     if (channel === "email" || channel === "both") {
-      window.location.href = `mailto:${reservation.clientEmail}?subject=${encodeURIComponent(
-        "Confirmation de réservation"
-      )}&body=${message}`;
+      if (reservation.clientEmail) {
+        window.location.href = `mailto:${reservation.clientEmail}?subject=${encodeURIComponent(
+          "Confirmation de réservation"
+        )}&body=${message}`;
+      } else {
+        setErrorStatus("Adresse e-mail manquante pour l’envoi par e-mail.");
+      }
     }
   };
 
@@ -267,17 +304,28 @@ export default function ReservationExperience() {
                       variant="outline"
                       className="w-full"
                       onClick={handleConfirm}
-                      disabled={selectedReservation.status === "Confirmée"}
+                      disabled={
+                        isConfirming ||
+                        estConfirmee(selectedReservation.status) ||
+                        estAnnulee(selectedReservation.status)
+                      }
                     >
-                      <CheckCircle2 className="mr-2 h-4 w-4" /> Confirmer réservation
+                      <CheckCircle2 className="mr-2 h-4 w-4" />
+                      {isConfirming ? "Confirmation en cours..." : "Confirmer réservation"}
                     </Button>
                     <Button
                       variant="ghost"
                       className="w-full"
                       onClick={() => sendNotification(selectedReservation)}
+                      disabled={!estConfirmee(selectedReservation.status)}
                     >
                       <Send className="mr-2 h-4 w-4" /> Envoyer la confirmation
                     </Button>
+                    {!estConfirmee(selectedReservation.status) && (
+                      <p className="text-xs text-muted-foreground">
+                        La confirmation ne peut être envoyée qu’après la confirmation de la réservation.
+                      </p>
+                    )}
                   </>
                 )}
               </CardContent>
@@ -326,7 +374,13 @@ export default function ReservationExperience() {
               </TableHeader>
               <TableBody>
                 {visibleReservations.map((reservation) => (
-                  <TableRow key={reservation.id} onClick={() => setSelectedReservation(reservation)}>
+                  <TableRow
+                    key={reservation.id}
+                    onClick={() => setSelectedReservation(reservation)}
+                    className={`cursor-pointer hover:bg-gray-50 ${
+                      selectedReservation?.id === reservation.id ? "bg-primary/5" : ""
+                    }`}
+                  >
                     <TableCell>
                       <p className="font-medium">{reservation.clientName}</p>
                       <p className="text-xs text-muted-foreground">{reservation.clientPhone}</p>
@@ -342,7 +396,7 @@ export default function ReservationExperience() {
                     </TableCell>
                     <TableCell>{reservation.passengers}</TableCell>
                     <TableCell>{reservation.totalWeightKg} kg</TableCell>
-                    <TableCell>{formatCurrency(reservation.totalPrice)}</TableCell>
+                    <TableCell>{formatCurrency(Number(reservation.totalPrice) || 0)}</TableCell>
                     <TableCell>
                       <StatusBadge status={reservation.status} />
                     </TableCell>
@@ -384,7 +438,7 @@ export default function ReservationExperience() {
       {status && (
         <StatusMessage
           icon={<CheckCircle2 className="h-5 w-5 text-primary" />}
-          title="Confirmation automatique"
+          title="Information"
           text={status}
         />
       )}
@@ -400,12 +454,14 @@ export default function ReservationExperience() {
 }
 
 function StatusBadge({ status }: { status: string }) {
-  const confirmed = status === "Confirmée";
-  return (
-    <Badge className={confirmed ? "bg-green-100 text-green-800" : "bg-orange-100 text-orange-800"}>
-      {status}
-    </Badge>
-  );
+  const valeur = normaliserTexte(status);
+
+  let classes = "bg-orange-100 text-orange-800"; // En attente (par défaut)
+  if (valeur.includes("confirm")) classes = "bg-green-100 text-green-800";
+  else if (valeur.includes("annul") || valeur.includes("refus")) classes = "bg-red-100 text-red-800";
+  else if (valeur.includes("termin")) classes = "bg-blue-100 text-blue-800";
+
+  return <Badge className={classes}>{status}</Badge>;
 }
 
 function StatusMessage({
@@ -414,7 +470,7 @@ function StatusMessage({
   text,
   tone = "info",
 }: {
-  icon: React.ReactNode;
+  icon: ReactNode;
   title: string;
   text: string;
   tone?: "info" | "error";
@@ -463,6 +519,9 @@ function AvailabilityPanel({ trip, boat }: { trip: Trip[]; boat: Boat[] }) {
               </div>
             );
           })}
+          {trip.length === 0 && (
+            <p className="text-sm text-muted-foreground md:col-span-2">Aucun voyage disponible pour le moment.</p>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -527,11 +586,21 @@ function GroupPanel() {
         <div className="grid gap-4 md:grid-cols-2">
           <div className="space-y-2">
             <Label>Nombre de passagers</Label>
-            <Input type="number" value={passengers} onChange={(event) => setPassengers(Number(event.target.value))} />
+            <Input
+              type="number"
+              min={0}
+              value={passengers}
+              onChange={(event) => setPassengers(Math.max(0, Number(event.target.value) || 0))}
+            />
           </div>
           <div className="space-y-2">
             <Label>Quantité de colis</Label>
-            <Input type="number" value={cargo} onChange={(event) => setCargo(Number(event.target.value))} />
+            <Input
+              type="number"
+              min={0}
+              value={cargo}
+              onChange={(event) => setCargo(Math.max(0, Number(event.target.value) || 0))}
+            />
           </div>
         </div>
         <div className="rounded-lg bg-muted p-4">
