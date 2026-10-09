@@ -54,13 +54,13 @@ const configStatut: Record<StatutReservation, { libelle: string; classe: string 
 type EtatPaiement = 'CREDIT' | 'PARTIEL' | 'PAYE';
 
 const getEtatPaiement = (reservation: Reservation): EtatPaiement | null => {
-  // Règle 1 : réservation annulée → on ne calcule pas de statut de paiement
+  // Règle 1 : réservation annulée → pas de statut de paiement
   if (normaliserStatut(reservation.status as string | undefined) === 'ANNULEE') return null;
 
   const total = Number(reservation.totalPrice) || 0;
   const paye = Number(reservation.amountPaid) || 0;
 
-  if (paye === 0) return 'CREDIT';   // Règle 2
+  if (paye === 0) return 'CREDIT';    // Règle 2
   if (paye < total) return 'PARTIEL'; // Règle 3
   return 'PAYE';                      // Règle 4 (paye >= total)
 };
@@ -69,6 +69,16 @@ const configPaiement: Record<EtatPaiement, { libelle: string; classe: string }> 
   CREDIT: { libelle: 'Crédit', classe: 'bg-red-100 text-red-800' },
   PARTIEL: { libelle: 'Partiellement payé', classe: 'bg-orange-100 text-orange-800' },
   PAYE: { libelle: 'Payé', classe: 'bg-green-100 text-green-800' },
+};
+
+/* =========================
+   Statut affiché : payée en totalité + en attente → Confirmée
+   (affichage uniquement, la base n'est pas modifiée)
+========================= */
+const getStatutAffiche = (reservation: Reservation): StatutReservation => {
+  const statutBrut = normaliserStatut(reservation.status as string | undefined);
+  if (statutBrut === 'EN_ATTENTE' && getEtatPaiement(reservation) === 'PAYE') return 'CONFIRMEE';
+  return statutBrut;
 };
 
 const MarchandiseManagementPage = () => {
@@ -219,7 +229,7 @@ const MarchandiseManagementPage = () => {
                     const trip = findTrip(reservation.tripId, alltrip); // retrouver le trip lié
                     const etatPaiement = getEtatPaiement(reservation);
                     const paiement = etatPaiement ? configPaiement[etatPaiement] : null;
-                    const statut = configStatut[normaliserStatut(reservation.status as string | undefined)];
+                    const statut = configStatut[getStatutAffiche(reservation)];
                     return (
                       <TableRow
                         key={reservation.id}
