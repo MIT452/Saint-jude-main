@@ -8,6 +8,25 @@ import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
 
 /* =========================================================
+   Utilitaires de texte
+========================================================= */
+const strip = (s: string) =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+
+const iso = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const titleCase = (s: string) =>
+  s
+    .split(" ")
+    .map((w) => (w ? w.charAt(0).toUpperCase() + w.slice(1) : w))
+    .join(" ");
+
+const isUpper = (s: string) => /^\p{Lu}/u.test(s);
+
+/* =========================================================
    Statuts (voir la logique Saint-Jude)
    - Statut de RÉSERVATION : En attente / Confirmée / Annulée
    - Statut de PAIEMENT    : Crédit / Partiellement payé / Payé
@@ -81,17 +100,14 @@ type Intent =
   | "refuser"
   | "inconnu";
 
-const strip = (s: string) =>
-  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
-
-const iso = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-
 const MONTHS = ["janvier","fevrier","mars","avril","mai","juin","juillet","aout","septembre","octobre","novembre","decembre"];
 const DAYS = ["dimanche","lundi","mardi","mercredi","jeudi","vendredi","samedi"];
 
-const UNITS = "sacs?|cartons?|colis|caisses?|futs?|bidons?";
-const GOODS = "marchandises?|riz|ciment|meubles?|motos?";
+const UNIT_WORDS = ["sacs","sac","cartons","carton","colis","caisses","caisse","futs","fut","bidons","bidon"];
+const GOOD_WORDS = ["marchandises","marchandise","riz","ciment","meubles","meuble","motos","moto"];
+const UNITS = UNIT_WORDS.join("|");
+const GOODS = GOOD_WORDS.join("|");
+const WEIGHT_WORDS = new Set(["poids", "kg", "kilo", "kilos", "tonne", "tonnes"]);
 
 const formatDateFr = (isoDate: string) =>
   new Date(`${isoDate}T00:00:00`).toLocaleDateString("fr-FR", {
@@ -114,7 +130,9 @@ function detectIntent(text: string): Intent {
   if (/^(non|no|nope)\b/.test(t)) return "refuser";
   if (/annul/.test(t)) return "annuler";
   if (/disponib|place|reste|libre/.test(t) && !/reserv|book/.test(t)) return "disponibilite";
-  if (/reserv|book|voyage|envoy|transport|expedi/.test(t)) return "reserver";
+  if (/reserv|book|voyag|envoy|transport|expedi|aller|partir|trajet|billet|colis|marchandise|passager/.test(t)) {
+    return "reserver";
+  }
   if (/aide|help|comment|que peux/.test(t)) return "aide";
   return "inconnu";
 }
@@ -129,7 +147,11 @@ function parseDate(text: string, now = new Date()): string | undefined {
   const iso1 = t.match(/\b(\d{4})-(\d{2})-(\d{2})\b/);
   if (iso1) return iso1[0];
 
-  const num = t.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/);
+  // 12/10/2026 ou 12-10 ; le point n'est accepté qu'avec l'année (12.10.2026),
+  // pour ne pas confondre un poids « 10.5 kg » avec une date
+  const num =
+    t.match(/\b(\d{1,2})[\/-](\d{1,2})(?:[\/-](\d{2,4}))?\b/) ??
+    t.match(/\b(\d{1,2})\.(\d{1,2})\.(\d{2,4})\b/);
   if (num) {
     const y = num[3] ? (num[3].length === 2 ? 2000 + +num[3] : +num[3]) : now.getFullYear();
     const d = new Date(y, +num[2] - 1, +num[1]);
@@ -156,37 +178,201 @@ function parseDate(text: string, now = new Date()): string | undefined {
   return undefined;
 }
 
-function parseRoute(text: string, knownPlaces: string[] = []): Pick<ReservationDraft, "depart" | "arrivee"> {
-  const raw = text.replace(/\s+/g, " ");
-  const places = knownPlaces.map((p) => ({ p, k: strip(p) }));
-  const t = strip(raw);
+/* ---------- Trajet : départ → arrivée ---------- */
 
-  // 1) lieux connus, dans l'ordre d'apparition
-  if (places.length) {
-    const found = places
-      .map(({ p, k }) => ({ p, i: t.indexOf(k) }))
-      .filter((x) => x.i >= 0)
-      .sort((a, b) => a.i - b.i);
-    if (found.length >= 2) return { depart: found[0].p, arrivee: found[1].p };
-    if (found.length === 1) {
-      const isDest = new RegExp(`\\b(vers|pour|a|au|jusqu'a)\\s+${strip(found[0].p)}`).test(t);
-      return isDest ? { arrivee: found[0].p } : { depart: found[0].p };
-    }
+type Role = "depart" | "arrivee";
+type RouteDraft = Pick<ReservationDraft, "depart" | "arrivee">;
+
+// Mots qui ne sont jamais un nom de lieu
+const STOP_WORDS = new Set<string>([
+  "de","du","des","depuis","a","au","aux","vers","pour","jusqu'a","jusqua",
+  "le","la","les","l","un","une","et","ou","avec","sans","sur","dans","en","ce","cette","afin","car","que","qui",
+  "je","j","j'ai","jai","veux","voudrais","souhaite","aimerais","aller","rendre","reserver","reservation",
+  "envoyer","expedier","transporter","voyage","trajet","port","ville",
+  "svp","stp","merci","bonjour","salut","ok","oui","non","annuler",
+  "demain","apres","aujourd'hui","aujourdhui","aujourd","prochain","prochaine","soir","matin",
+  "kg","kilo","kilos","tonne","tonnes","poids","total","chaque","chacun","chacune",
+  "passager","passagers","personne","personnes","adulte","adultes",
+  ...DAYS,
+  ...MONTHS,
+  ...UNIT_WORDS,
+  ...GOOD_WORDS,
+]);
+
+const ORIGIN_MARKS = new Set(["de", "depuis"]);
+const DEST_MARKS = new Set(["a", "vers", "pour", "jusqu'a", "jusqua", "au"]);
+const SKIP_AFTER_DEST = new Set(["aller", "rendre", "a", "vers", "jusqu'a", "jusqua", "au", "le", "la", "les", "l", "port", "ville"]);
+const PLACE_NOUNS = new Set(["port", "ville"]);
+
+interface Tok {
+  raw: string; // texte d'origine (accents et majuscules conservés)
+  norm: string; // sans accents, en minuscules
+  end: boolean; // le mot termine une proposition (virgule, point...)
+}
+
+function tokenize(text: string): Tok[] {
+  const prepared = text
+    .replace(/\s*(->|→|=>)\s*/g, " → ")
+    .replace(/\b[dD]['’]\s*(?=\p{L})/gu, "de ") // d'Antananarivo → de Antananarivo
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!prepared) return [];
+
+  return prepared.split(" ").map((w) => {
+    if (w === "→") return { raw: "→", norm: "→", end: false };
+    const clean = (s: string) => s.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+    return {
+      raw: clean(w),
+      norm: clean(strip(w).replace(/’/g, "'")),
+      end: /[,;.!?:]$/.test(w),
+    };
+  });
+}
+
+const isStopTok = (t: Tok) => t.norm === "" || t.norm === "→" || /^\d/.test(t.norm) || STOP_WORDS.has(t.norm);
+
+// Lit un lieu (1 mot, ou 2 si le second commence par une majuscule) vers la droite
+function readPlaceForward(toks: Tok[], start: number): { name: string; next: number } | null {
+  const parts: string[] = [];
+  let i = start;
+  while (i < toks.length && parts.length < 2 && !isStopTok(toks[i])) {
+    if (parts.length === 1 && !isUpper(toks[i].raw)) break;
+    parts.push(toks[i].raw);
+    const ended = toks[i].end;
+    i++;
+    if (ended) break;
+  }
+  return parts.length ? { name: titleCase(parts.join(" ")), next: i } : null;
+}
+
+// Lit un lieu vers la gauche (utilisé avec la flèche « → »)
+function readPlaceBackward(toks: Tok[], last: number): string | null {
+  const parts: string[] = [];
+  let i = last;
+  while (i >= 0 && parts.length < 2 && !isStopTok(toks[i])) {
+    if (parts.length === 1 && (!isUpper(toks[i].raw) || toks[i].end)) break;
+    parts.unshift(toks[i].raw);
+    i--;
+  }
+  return parts.length ? titleCase(parts.join(" ")) : null;
+}
+
+// Après « à / vers / pour » : saute « aller », « le port de »... puis lit le lieu
+function readPlaceAfterDestMark(toks: Tok[], start: number): { name: string; next: number } | null {
+  let k = start;
+  while (k < toks.length) {
+    const w = toks[k].norm;
+    if (SKIP_AFTER_DEST.has(w)) { k++; continue; }
+    if ((w === "de" || w === "du") && k > 0 && PLACE_NOUNS.has(toks[k - 1].norm)) { k++; continue; }
+    break;
+  }
+  return readPlaceForward(toks, k);
+}
+
+// « 2 colis de vêtements » : ce « de » introduit une marchandise, pas un départ
+function originAllowed(toks: Tok[], i: number): boolean {
+  const prev = toks[i - 1];
+  if (!prev) return true;
+  const blocked = UNIT_WORDS.includes(prev.norm) || /^\d/.test(prev.norm) || WEIGHT_WORDS.has(prev.norm);
+  if (!blocked) return true;
+  const next = toks[i + 1];
+  return !!next && isUpper(next.raw);
+}
+
+function roleFromText(before: string): Role | undefined {
+  const b = before.replace(/\s+/g, " ").trimEnd();
+  if (/(?:^|\s)(?:de|depuis)$/.test(b) || /(?:^|\s)d'$/.test(b)) return "depart";
+  if (/(?:^|\s)(?:a|vers|pour|jusqu'a|jusqua|au)(?:\s+(?:aller|rendre))?$/.test(b)) return "arrivee";
+  return undefined;
+}
+
+function parseRoute(
+  text: string,
+  knownPlaces: string[] = [],
+  context: RouteDraft = {},
+): RouteDraft {
+  // 1) Lieux connus (ex. ports des trajets) : détection la plus fiable
+  const t = strip(text).replace(/’/g, "'").replace(/\s+/g, " ");
+  const known = knownPlaces
+    .filter(Boolean)
+    .map((place) => ({ place, key: strip(place).replace(/’/g, "'") }))
+    .filter((x) => x.key)
+    .sort((a, b) => b.key.length - a.key.length); // les noms longs d'abord
+
+  const taken: Array<[number, number]> = [];
+  const found: Array<{ place: string; index: number; role?: Role }> = [];
+  for (const { place, key } of known) {
+    const m = new RegExp(`(?:^|[^\\p{L}\\p{N}])(${escapeRegExp(key)})(?=$|[^\\p{L}\\p{N}])`, "u").exec(t);
+    if (!m) continue;
+    const index = m.index + m[0].length - m[1].length;
+    const end = index + key.length;
+    if (taken.some(([s, e]) => index < e && end > s)) continue; // chevauchement
+    taken.push([index, end]);
+    found.push({ place, index, role: roleFromText(t.slice(0, index)) });
   }
 
-  // 2) motifs "de X à Y" / "d'X à Y" / "X -> Y" / "vers Y"
-  const word = "([A-ZÀ-Ý][\\p{L}'-]+(?:\\s[A-ZÀ-Ý][\\p{L}'-]+)?)";
-  const m1 = raw.match(
-    new RegExp(`(?:\\bde\\s+|\\bd['’])${word}\\s+(?:à|a|vers|pour|jusqu'à)\\s+${word}`, "u")
-  );
-  if (m1) return { depart: m1[1], arrivee: m1[2] };
-  const m2 = raw.match(new RegExp(`${word}\\s*(?:->|→|=>|-)\\s*${word}`, "u"));
-  if (m2) return { depart: m2[1], arrivee: m2[2] };
-  // "\b" ne fonctionne pas devant "à" : on utilise un début de mot explicite
-  const m3 = raw.match(new RegExp(`(?:^|\\s)(?:vers|pour|à)\\s+${word}`, "u"));
-  if (m3) return { arrivee: m3[1] };
+  if (found.length) {
+    found.sort((a, b) => a.index - b.index);
+    let depart = found.find((f) => f.role === "depart")?.place;
+    let arrivee = found.find((f) => f.role === "arrivee")?.place;
+    for (const f of found.filter((x) => !x.role)) {
+      if (!depart && !context.depart) depart = f.place;
+      else if (!arrivee && !context.arrivee) arrivee = f.place;
+    }
+    return { depart, arrivee };
+  }
+
+  // 2) Texte libre, sans dépendre des majuscules (utile pour la dictée vocale)
+  const toks = tokenize(text);
+
+  // 2a. « X → Y »
+  const arrow = toks.findIndex((x) => x.raw === "→");
+  if (arrow > 0) {
+    const from = readPlaceBackward(toks, arrow - 1);
+    const to = readPlaceForward(toks, arrow + 1);
+    if (from || to) return { depart: from ?? undefined, arrivee: to?.name };
+  }
+
+  // 2b. « de X à Y », « d'X vers Y », « depuis X jusqu'à Y », « de X pour aller à Y »
+  for (let i = 0; i < toks.length; i++) {
+    if (!ORIGIN_MARKS.has(toks[i].norm) || !originAllowed(toks, i)) continue;
+    const from = readPlaceForward(toks, i + 1);
+    if (!from) continue; // « de riz », « de 10 kg »... ne sont pas des lieux
+    const k = from.next;
+    if (k >= toks.length || !DEST_MARKS.has(toks[k].norm)) continue;
+    const to = readPlaceAfterDestMark(toks, k + 1);
+    if (to) return { depart: from.name, arrivee: to.name };
+  }
+
+  // 2c. Destination seule : « vers Y », « à Y », « pour aller à Y », « pour Y »
+  for (let i = 0; i < toks.length; i++) {
+    const w = toks[i].norm;
+    const isDestMark =
+      w === "vers" || w === "pour" || w === "jusqu'a" || w === "jusqua" || (w === "a" && toks[i].raw === "à");
+    if (!isDestMark) continue;
+    const to = readPlaceAfterDestMark(toks, i + 1);
+    if (to) return { arrivee: to.name };
+  }
+
+  // 2d. Départ seul : « de X », « depuis X »
+  for (let i = 0; i < toks.length; i++) {
+    if (!ORIGIN_MARKS.has(toks[i].norm) || !originAllowed(toks, i)) continue;
+    const from = readPlaceForward(toks, i + 1);
+    if (from) return { depart: from.name };
+  }
+
   return {};
 }
+
+// Réponse courte du type « Toamasina » à la question « quel port de départ ? »
+function parseLonePlace(text: string): string | undefined {
+  const toks = tokenize(text);
+  if (toks.length === 0 || toks.length > 2) return undefined;
+  if (toks.some(isStopTok)) return undefined;
+  return titleCase(toks.map((x) => x.raw).join(" "));
+}
+
+/* ---------- Quantités, poids, marchandise ---------- */
 
 type Quantities = Pick<
   ReservationDraft,
@@ -232,13 +418,24 @@ function parseWeightMode(text: string): ReservationDraft["poidsMode"] {
 }
 
 function mergeDraft(prev: ReservationDraft, text: string, knownPlaces: string[] = []): ReservationDraft {
-  const route = parseRoute(text, knownPlaces);
+  const route = parseRoute(text, knownPlaces, { depart: prev.depart, arrivee: prev.arrivee });
   const q = parseQuantities(text);
   const date = parseDate(text);
   const mode = parseWeightMode(text);
   const next: ReservationDraft = { ...prev };
+
   if (route.depart) next.depart = route.depart;
   if (route.arrivee) next.arrivee = route.arrivee;
+
+  // Réponse d'un seul mot (« Toamasina ») quand il ne manque que le départ ou l'arrivée
+  if (!route.depart && !route.arrivee && !date && !mode && Object.keys(q).length === 0) {
+    const lone = parseLonePlace(text);
+    if (lone) {
+      if (!prev.depart && prev.arrivee) next.depart = lone;
+      else if (prev.depart && !prev.arrivee) next.arrivee = lone;
+    }
+  }
+
   if (date) next.date = date;
   if (q.passagers !== undefined) next.passagers = q.passagers;
   if (q.marchandise) next.marchandise = q.marchandise;
@@ -254,7 +451,7 @@ function mergeDraft(prev: ReservationDraft, text: string, knownPlaces: string[] 
   return next;
 }
 
-// Poids total réel (null tant que l'ambiguïté « par colis / total » n'est pas levée)
+// Poids total réel (undefined tant que l'ambiguïté « par colis / total » n'est pas levée)
 function getPoidsTotal(d: ReservationDraft): number | undefined {
   if (d.poidsKg === undefined) return undefined;
   if (d.quantite && d.quantite > 1) {
