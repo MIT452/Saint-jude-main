@@ -1,4 +1,4 @@
-import { useState, useEffect, FC } from "react";
+﻿import { useState, useEffect, FC } from "react";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
@@ -18,11 +18,20 @@ import Tables from "./tools/TableGoods";
 import { findBoat, findTrip } from "../Tools/Tools";
 import { inputFields } from "./goodsForms";
 import { onAddService } from "../data/service";
+import ConfirmDialog from "./ConfirmDialog";
 
 interface ReservationFormProps {
   onClose: () => void;
   idReservation: string
 }
+
+// Moyens de paiement proposés
+type MoyenPaiement = "banque" | "mvola" | "caisse";
+const MOYENS_PAIEMENT: Record<MoyenPaiement, string> = {
+  banque: "Banque",
+  mvola: "MVola",
+  caisse: "Caisse",
+};
 
 const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) => {
   const [currentGoods, setCurrentGoods] = useState<Goods[]>([]);
@@ -34,7 +43,13 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
   const [formData, setFormData] = useState<ReservationFormData>(formeReservationVoid);
   const [idBoatSelected, setIdBoat] = useState<string>('');
   const [weightTrip, setWeightTrip] = useState<number>(0);
-  const [readOnlyValue, setReadOnly] = useState<string>('option1');
+  // Mode de calcul du prix : automatique (quantité x prix unitaire) ou saisie manuelle du prix total
+  const [priceMode, setPriceMode] = useState<"auto" | "manual">("auto");
+  // Moyen de paiement : Banque, MVola ou Caisse
+  const [paymentMethod, setPaymentMethod] = useState<MoyenPaiement>("caisse");
+  // Marchandise en attente de confirmation de suppression
+  const [goodToDeleteId, setGoodToDeleteId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const [idCashMouvement] = useState(() => uuid());
   const { trip: trips, boat: allBoat, goods: allGoods } = useSelector((state: RootState) => state.stJude);
@@ -52,7 +67,7 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
     const { quantity, unitWeight, unitPrice } = formData;
     const totalWeight = quantity && unitWeight ? (quantity * unitWeight) : 0;
     const totalPrice = quantity && unitPrice ? (quantity * unitPrice) : 0;
-    readOnlyValue === "option1" ?
+    priceMode === "auto" ?
       setFormData((prev) => ({ ...prev, totalWeight, totalPrice, amountToBePaidByClient: totalPrice })) :
       setFormData((prev) => ({ ...prev, totalWeight, }));
   }
@@ -67,10 +82,7 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
     setWeightTrip(goodsInTrip.reduce((acc, { totalWeight }) => acc + Number(totalWeight), 0))
   }
   const payTotal = (total: number) => {
-    formData.rest = 0;
-    formData.amountPaidByClient = total;
-    formData.paymentStatus = true;
-    setFormData((prev) => ({ ...prev, amountPaidByClient: formData.amountPaidByClient, rest: formData.rest, paymentStatus: formData.paymentStatus }));
+    setFormData((prev) => ({ ...prev, amountPaidByClient: total, rest: 0, paymentStatus: true }));
   }
   const calculatePrice = () => {
     let totalPrice = currentGoods.reduce((acc, { totalPrice }) => acc + Number(totalPrice), 0)
@@ -79,8 +91,8 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
   const setCashMouvementFct = () => {
     let currentCashMouvement: CashMovement = {
       ...cashMouvement,
-      credit: formData.amountPaidByClient,
-      designation: `Paiement du client ${formData.senderName}`,
+      credit: Number(formData.amountPaidByClient) || 0,
+      designation: `Paiement du client ${formData.senderName} (${MOYENS_PAIEMENT[paymentMethod]})`,
       userId: currentUser?.id ? currentUser.id : "",
     }
     setCashMouvements(currentCashMouvement)
@@ -89,7 +101,7 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
     const prefix =
       formData.cargoType === "fragile"
         ? "FR"
-        : formData.cargoType === "agricultural"
+        : formData.cargoType === "agricole"
           ? "AG"
           : "GN"
     const timestamp = Date.now().toString().slice(-6)
@@ -143,51 +155,77 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
     };
     setCurrentGoods([...currentGoods, goods]);
   }
-const onAdd = async () => {
-  if (currentGoods.length === 0 || !currenReservation) {
-    toast.error("Aucune marchandise à ajouter ou réservation invalide.");
-    return;
-  }
 
-  const promises = currentGoods.map(good => 
-    onAddService(TABLE_DATA_BASE.GOODS, good)
-  );
+  /**
+   * Enregistrement SÉQUENTIEL (et non plus en parallèle) :
+   * 1) paiement en caisse (si un montant est payé)
+   * 2) réservation
+   * 3) marchandises (qui dépendent de la réservation via reservationId)
+   * En cas d'échec, le message indique l'étape exacte.
+   */
+  const onAdd = async () => {
+    if (isSaving) return;
+    if (currentGoods.length === 0 || !currenReservation) {
+      toast.error("Aucune marchandise à ajouter ou réservation invalide.");
+      return;
+    }
 
-  promises.push(onAddService(TABLE_DATA_BASE.RESERVATION, currenReservation));
+    const paid = Number(formData.amountPaidByClient) || 0;
+    if (paid > priceTotal) {
+      toast.error("Le montant payé dépasse le prix total.");
+      return;
+    }
 
-  if (formData.amountPaidByClient !== 0) {
-    const currentCashMouvement: CashMovement = {
-      ...cashMouvement,
-      id: idCashMouvement,
-      date: new Date().toISOString(),
-      tripId: currenReservation.tripId
-    };
-    promises.push(onAddService(TABLE_DATA_BASE.CASHMOVEMENT, currentCashMouvement));
-  }
-
-  const results = await Promise.all(promises);
-
-  // Vérifie si toutes ont réussi
-  if (results.every(r => r === "success")) {
-    dispatch(setGoods(currentGoods));
-    dispatch(setReservation(currenReservation));
-
-    if (formData.amountPaidByClient !== 0) {
-      dispatch(setCashMouvement({
+    setIsSaving(true);
+    try {
+      const currentCashMouvement: CashMovement = {
         ...cashMouvement,
         id: idCashMouvement,
         date: new Date().toISOString(),
         tripId: currenReservation.tripId
-      }));
-    }
+      };
 
-    toast.success("Toutes les données ont été ajoutées avec succès !");
-    onReset();
-    onClose();
-  } else {
-    toast.error("Une erreur est survenue lors de l'ajout de certaines données.");
-  }
-};
+      // 1) Paiement
+      if (paid > 0) {
+        const cashResult = await onAddService(TABLE_DATA_BASE.CASHMOVEMENT, currentCashMouvement);
+        if (cashResult !== "success") {
+          toast.error("Échec de l'enregistrement du paiement (caisse).");
+          return;
+        }
+      }
+
+      // 2) Réservation
+      const reservationResult = await onAddService(TABLE_DATA_BASE.RESERVATION, currenReservation);
+      if (reservationResult !== "success") {
+        toast.error("Échec de l'enregistrement de la réservation.");
+        return;
+      }
+
+      // 3) Marchandises
+      for (const good of currentGoods) {
+        const goodResult = await onAddService(TABLE_DATA_BASE.GOODS, good);
+        if (goodResult !== "success") {
+          toast.error(`Échec de l'ajout de la marchandise « ${good.itemName} ».`);
+          return;
+        }
+      }
+
+      dispatch(setGoods(currentGoods));
+      dispatch(setReservation(currenReservation));
+      if (paid > 0) {
+        dispatch(setCashMouvement(currentCashMouvement));
+      }
+
+      toast.success("Toutes les données ont été ajoutées avec succès !");
+      onReset();
+      onClose();
+    } catch (error) {
+      console.error(error);
+      toast.error("Une erreur est survenue lors de l'ajout des données.");
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const onReset = () => {
     setFormData(formeReservationVoid);
@@ -198,10 +236,12 @@ const onAdd = async () => {
     setCurrentReservation(reservationVoid);
   }
   const calculateReste = () => {
-    formData.amountPaidByClient === 0 ? formData.rest = priceTotal : formData.rest = priceTotal - formData.amountPaidByClient;
-    setFormData((prev) => ({ ...prev, rest: formData.rest }));
+    const paid = Number(formData.amountPaidByClient) || 0;
+    setFormData((prev) => ({ ...prev, rest: priceTotal - paid }));
   }
   const setReservationData = () => {
+    const total = currentGoods.reduce((acc, { totalPrice }) => acc + Number(totalPrice), 0);
+    const paid = Number(formData.amountPaidByClient) || 0;
     let reservation: Reservation = {
       id: idReservation,
       clientName: formData.senderName,
@@ -210,15 +250,15 @@ const onAdd = async () => {
       destName: formData.recipientName,
       destTel: formData.recipientPhone,
       destAdresse: formData.recipientAddress,
-            status: "EN_ATTENTE",
+      status: "EN_ATTENTE",
       date: `${new Date().toISOString()}`,
       quantity: currentGoods.reduce((acc, { quantity }) => acc + Number(quantity), 0),
       weight: currentGoods.reduce((acc, { totalWeight }) => acc + Number(totalWeight), 0),
       tripId: formData.tripId,
-      amountPaid: formData.amountPaidByClient,
-      amountToPay: currentGoods.reduce((acc, { totalPrice }) => acc + Number(totalPrice), 0) - formData.amountPaidByClient,
-      paymentStatus: formData.amountToBePaidByClient === 0 ? true : false,
-      totalPrice: currentGoods.reduce((acc, { totalPrice }) => acc + Number(totalPrice), 0),
+      amountPaid: paid,
+      amountToPay: total - paid,
+      paymentStatus: total > 0 && paid >= total,
+      totalPrice: total,
       userId: currentUser?.id ? currentUser.id : "",
       idCashMovement: idCashMouvement,
     }
@@ -226,9 +266,9 @@ const onAdd = async () => {
   }
   useEffect(() => { calculateUnitPrice() }, [formData.totalPrice]);
   useEffect(() => { setReservationData() }, [currentGoods, formData.amountPaidByClient, priceTotal]);
-  useEffect(() => { calculateDerivedValues() }, [formData.quantity, formData.unitWeight, formData.unitPrice, formData.totalPrice]);
+  useEffect(() => { calculateDerivedValues() }, [formData.quantity, formData.unitWeight, formData.unitPrice, formData.totalPrice, priceMode]);
   useEffect(() => { calculatePrice() }, [currentGoods, formData.weight, formData.volume, formData.cargoType]);
-  useEffect(() => { calculateReste(), setCashMouvementFct() }, [formData.amountPaidByClient, priceTotal]);
+  useEffect(() => { calculateReste(), setCashMouvementFct() }, [formData.amountPaidByClient, priceTotal, paymentMethod]);
   useEffect(() => {
     let currentTrip = findTrip(formData.tripId, futureTrips);
     setIdBoat(currentTrip.boatId);
@@ -251,6 +291,12 @@ const onAdd = async () => {
   const onDeleteGood = (id: string) => {
     setCurrentGoods((prevGoods) => prevGoods.filter((good) => good.id !== id));
   };
+  // Clic sur la corbeille : on demande d'abord confirmation
+  const requestDeleteGood = (id: string) => {
+    setGoodToDeleteId(id);
+  };
+  const goodToDelete = currentGoods.find((good) => good.id === goodToDeleteId);
+
   return (
     <div className="flex fixed items-center justify-center inset-0 flex-col p-2.5 z-50">
       <div className="fixed inset-0 bg-black/50" onClick={() => onClose()}></div>
@@ -301,7 +347,6 @@ const onAdd = async () => {
                 </SelectContent>
               </Select>
             </CardContent>
-            {/* <SelectField handleInput={handleInput} trips={trips}></SelectField> */}
           </CardHeader>
 
           <CardContent className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -327,20 +372,37 @@ const onAdd = async () => {
             ))}
             {/* Champs calculés */}
             <InputField label="Poids total" value={formData.totalWeight} readOnly />
-            {/* <InputField label="Prix total" value={formData.totalPrice} readOnly /> */}
+
+            {/* Moyen de paiement */}
             <div className="flex flex-col gap-2">
               <Label>Moyen de payement</Label>
-              <Select value={readOnlyValue} onValueChange={(v) => setReadOnly(v)}>
+              <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as MoyenPaiement)}>
                 <SelectTrigger>
                   <SelectValue placeholder="..." />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="option1">Option 1</SelectItem>
-                  <SelectItem value="option2">Option 2</SelectItem>
+                  <SelectItem value="banque">Banque</SelectItem>
+                  <SelectItem value="mvola">MVola</SelectItem>
+                  <SelectItem value="caisse">Caisse</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <InputField label="Montant payer par le client" type="number" value={formData.totalPrice} readOnly={readOnlyValue === 'option1' ? true : false} onChange={(v) => handleInput('totalPrice', v)} />
+
+            {/* Mode de calcul du prix */}
+            <div className="flex flex-col gap-2">
+              <Label>Calcul du prix</Label>
+              <Select value={priceMode} onValueChange={(v) => setPriceMode(v as "auto" | "manual")}>
+                <SelectTrigger>
+                  <SelectValue placeholder="..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="auto">Automatique (quantité × prix unitaire)</SelectItem>
+                  <SelectItem value="manual">Saisie du prix total</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <InputField label="Montant payer par le client" type="number" value={formData.totalPrice} readOnly={priceMode === 'auto'} onChange={(v) => handleInput('totalPrice', v)} />
           </CardContent>
           <CardFooter className="flex justify-end gap-4">
             <Button variant="default" onClick={onHadlSubmit}>
@@ -354,7 +416,7 @@ const onAdd = async () => {
           </CardFooter>
         </Card>
         <div className="overflow-x-auto text-primary">
-          <Tables currentGoods={currentGoods} reservationClient={formData.senderName} onUpdateGood={handleUpdateGood} onDeleteGoods={onDeleteGood}></Tables>
+          <Tables currentGoods={currentGoods} reservationClient={formData.senderName} onUpdateGood={handleUpdateGood} onDeleteGoods={requestDeleteGood}></Tables>
         </div>
         {/* Actions */}
         <div className="flex flex-col gap-4 mt-6">
@@ -410,7 +472,10 @@ const onAdd = async () => {
                 <div className="text-xl font-bold">Prix total : {priceTotal} Ar</div>
                 <div className="flex items-center gap-2">
                   <Label className="whitespace-nowrap">Montant payé :</Label>
-                  <Input type="number" value={formData.amountPaidByClient} onChange={(v) => handleInput("amountPaidByClient", v.target.value)} className="w-40" />
+                  <Input type="number" value={formData.amountPaidByClient} onChange={(v) => handleInput("amountPaidByClient", Number(v.target.value) || 0)} className="w-40" />
+                </div>
+                <div className="text-sm">
+                  Moyen de paiement : <span className="font-medium">{MOYENS_PAIEMENT[paymentMethod]}</span>
                 </div>
 
                 <div className="text-sm text-muted-foreground">
@@ -424,9 +489,25 @@ const onAdd = async () => {
             </Card>
           </div>
           {/* Confirmer */}
-          <Button className="px-6 py-6 text-lg" onClick={onAdd}>Confirmer réservation</Button>
+          <Button className="px-6 py-6 text-lg" onClick={onAdd} disabled={isSaving}>
+            {isSaving ? "Enregistrement..." : "Confirmer réservation"}
+          </Button>
         </div>
       </div>
+
+      {/* Confirmation avant suppression d'une marchandise */}
+      <ConfirmDialog
+        open={goodToDeleteId !== null}
+        title="Supprimer la marchandise"
+        message={`Voulez-vous vraiment supprimer ${goodToDelete?.itemName ? `« ${goodToDelete.itemName} »` : "cette marchandise"} ?`}
+        confirmLabel="Oui, supprimer"
+        cancelLabel="Non"
+        onCancel={() => setGoodToDeleteId(null)}
+        onConfirm={() => {
+          if (goodToDeleteId) onDeleteGood(goodToDeleteId);
+          setGoodToDeleteId(null);
+        }}
+      />
     </div>
   )
 }
