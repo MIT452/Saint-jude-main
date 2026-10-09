@@ -7,33 +7,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Plus, Search, Filter, Package } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux';
-import { findBoat, findTrip, findUser, formatCityName, formatCurrency }from '../Tools/Tools';
+import { findBoat, findTrip, findUser, formatCityName, formatCurrency } from '../Tools/Tools';
 import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
 import { Badge } from './ui/badge';
 import { Goods, Reservation } from '../data/type';
 import { reservationVoid } from '../data/dataVoid';
-
-/* =========================
-   Paiement : Payé / Partiel / Non payé
-   (calculé à partir des montants, pas du booléen paymentStatus)
-========================= */
-type EtatPaiement = 'PAYE' | 'PARTIEL' | 'NON_PAYE';
-
-const getEtatPaiement = (reservation: Reservation): EtatPaiement => {
-  const total = Number(reservation.totalPrice) || 0;
-  const paye = Number(reservation.amountPaid) || 0;
-  if (total > 0 && paye >= total) return 'PAYE';
-  if (paye > 0) return 'PARTIEL';
-  return 'NON_PAYE';
-};
-
-const configPaiement: Record<EtatPaiement, { libelle: string; classe: string }> = {
-  PAYE: { libelle: 'Payé', classe: 'bg-green-100 text-green-800' },
-  PARTIEL: { libelle: 'Partiel', classe: 'bg-orange-100 text-orange-800' },
-  NON_PAYE: { libelle: 'Non payé', classe: 'bg-red-100 text-red-800' },
-};
 
 /* =========================
    Statut de la réservation (valeurs de la base, en français)
@@ -63,6 +43,34 @@ const configStatut: Record<StatutReservation, { libelle: string; classe: string 
   TERMINEE: { libelle: 'Terminée', classe: 'bg-blue-100 text-blue-800' },
 };
 
+/* =========================
+   Statut du paiement : Crédit / Partiellement payé / Payé
+   Règles (calculées à partir des montants) :
+   1. Réservation annulée par le client → statut « Annulée » (pas de statut de paiement)
+   2. Sinon, montant payé = 0 Ar                 → « Crédit »
+   3. Sinon, montant payé < montant total        → « Partiellement payé »
+   4. Sinon, montant payé >= montant total       → « Payé »
+========================= */
+type EtatPaiement = 'CREDIT' | 'PARTIEL' | 'PAYE';
+
+const getEtatPaiement = (reservation: Reservation): EtatPaiement | null => {
+  // Règle 1 : réservation annulée → on ne calcule pas de statut de paiement
+  if (normaliserStatut(reservation.status as string | undefined) === 'ANNULEE') return null;
+
+  const total = Number(reservation.totalPrice) || 0;
+  const paye = Number(reservation.amountPaid) || 0;
+
+  if (paye === 0) return 'CREDIT';   // Règle 2
+  if (paye < total) return 'PARTIEL'; // Règle 3
+  return 'PAYE';                      // Règle 4 (paye >= total)
+};
+
+const configPaiement: Record<EtatPaiement, { libelle: string; classe: string }> = {
+  CREDIT: { libelle: 'Crédit', classe: 'bg-red-100 text-red-800' },
+  PARTIEL: { libelle: 'Partiellement payé', classe: 'bg-orange-100 text-orange-800' },
+  PAYE: { libelle: 'Payé', classe: 'bg-green-100 text-green-800' },
+};
+
 const MarchandiseManagementPage = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -72,8 +80,8 @@ const MarchandiseManagementPage = () => {
   const [currentGoods, setCurrentGoods] = useState<Goods[]>([]);
   const [currentReservation, setCurrentReservation] = useState<Reservation>(reservationVoid);
 
-  const {allUser , currentUser} = useSelector((state: RootState) => state.users);
-  const { reservation: allReservation , boat :allBoat} = useSelector((state: RootState) => state.stJude);
+  const { allUser, currentUser } = useSelector((state: RootState) => state.users);
+  const { reservation: allReservation, boat: allBoat } = useSelector((state: RootState) => state.stJude);
   const allGoods = useSelector((state: RootState) => state.stJude.goods);
   const alltrip = useSelector((state: RootState) => state.stJude.trip);
 
@@ -85,59 +93,67 @@ const MarchandiseManagementPage = () => {
     return user ? `${user.name} ${user.lastName}` : 'Inconnu';
   };
 
-const filteredReservations = allReservation.filter((reservation) => {
-  // 0. Vérifier si c'est un Capitaine
-  if(currentUser)
-  if (currentUser.role === "Capitaine") {
+  const filteredReservations = allReservation.filter((reservation) => {
+    // 0. Si c'est un Capitaine : uniquement les réservations de ses bateaux
+    if (currentUser && currentUser.role === 'Capitaine') {
+      const trip = findTrip(reservation.tripId, alltrip);
+      const boat = trip ? findBoat(trip.boatId, allBoat) : undefined;
+      if (!boat || !boat.crew.includes(currentUser.id)) return false;
+    }
+
+    // 1. Filtre par statut (annulée) ou par statut de paiement
+    const statut = normaliserStatut(reservation.status as string | undefined);
+    const etatPaiement = getEtatPaiement(reservation);
+
+    if (statusFilter === 'cancelled' && statut !== 'ANNULEE') return false;
+    if (statusFilter === 'paid' && etatPaiement !== 'PAYE') return false;
+    if (statusFilter === 'partial' && etatPaiement !== 'PARTIEL') return false;
+    if (statusFilter === 'credit' && etatPaiement !== 'CREDIT') return false;
+
+    // 2. Recherche (client, destinataire, ID, utilisateur, trajet)
+    const search = searchTerm.toLowerCase();
+    const user = findUser(reservation.userId, allUser);
     const trip = findTrip(reservation.tripId, alltrip);
-    const boat = findBoat(trip.boatId, allBoat);
 
-    // si le bateau du trajet n'appartient pas à ce capitaine → on exclut
-    if (!boat.crew.includes(currentUser.id)) return false;
-  }
-
-  // 1. Filtrage par état de paiement
-  const etatPaiement = getEtatPaiement(reservation);
-  if (statusFilter === "paid" && etatPaiement !== 'PAYE') return false;
-  if (statusFilter === "partial" && etatPaiement !== 'PARTIEL') return false;
-  if (statusFilter === "unpaid" && etatPaiement !== 'NON_PAYE') return false;
-
-  // 2. Recherche (client, destinataire, ID, utilisateur, trajet)
-  const search = searchTerm.toLowerCase();
-  const user = findUser(reservation.userId, allUser);
-  const trip = findTrip(reservation.tripId, alltrip);
-
-  return (
-    reservation.clientName.toLowerCase().includes(search) ||
-    reservation.destName.toLowerCase().includes(search) ||
-    reservation.id.toLowerCase().includes(search) ||
-    user.name.toLowerCase().includes(search) ||
-    user.lastName.toLowerCase().includes(search) ||
-    trip.from.toLowerCase().includes(search) ||
-    trip.to.toLowerCase().includes(search)
-  );
-});
-
+    return (
+      (reservation.clientName ?? '').toLowerCase().includes(search) ||
+      (reservation.destName ?? '').toLowerCase().includes(search) ||
+      (reservation.id ?? '').toLowerCase().includes(search) ||
+      (user?.name ?? '').toLowerCase().includes(search) ||
+      (user?.lastName ?? '').toLowerCase().includes(search) ||
+      (trip?.from ?? '').toLowerCase().includes(search) ||
+      (trip?.to ?? '').toLowerCase().includes(search)
+    );
+  });
 
   const onShowDetailGoodsModal = (reservation: Reservation) => {
-    setCurrentReservation(reservation)
+    setCurrentReservation(reservation);
     setCurrentGoods(allGoods.filter(({ reservationId }) => reservationId === reservation.id));
     setShowDetailGoodsModal(true);
-  }
-  useEffect(() => { setIdReservation(uuid()) }, [showAddGoodsModal])
+  };
+
+  useEffect(() => {
+    setIdReservation(uuid());
+  }, [showAddGoodsModal]);
+
   return (
     <div className="min-h-screen relative text-gray-900">
-      <div className="max-w-full ">
+      <div className="max-w-full">
         {/* Header */}
         <div className="w-full border-b-2 py-4 px-2 sticky top-2 flex items-center justify-between mb-8">
           <div>
-            <h2 className="text-2xl font-semibold  mb-2">Gestion des Marchandises</h2>
+            <h2 className="text-2xl font-semibold mb-2">Gestion des Marchandises</h2>
             <p className="text-muted-foreground">Suivi et gestion des marchandises transportées</p>
           </div>
-          <Button className="bg-primary text-primary-foreground hover:bg-primary/90" onClick={() => setShowAddGoodsModal(!showAddGoodsModal)}>
-            <Plus className="h-4 w-4 mr-2" />Ajouter reservation
+          <Button
+            className="bg-primary text-primary-foreground hover:bg-primary/90"
+            onClick={() => setShowAddGoodsModal(!showAddGoodsModal)}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Ajouter réservation
           </Button>
         </div>
+
         {/* Filters */}
         <Card className="border-border hover:shadow-md transition-shadow mb-6">
           <CardContent className="pt-6">
@@ -146,35 +162,38 @@ const filteredReservations = allReservation.filter((reservation) => {
                 <div className="relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
                   <Input
-                    placeholder="Rechercher par client, marchandise ou ID..."
+                    placeholder="Rechercher par expéditeur, destinataire ou ID..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10" />
+                    className="pl-10"
+                  />
                 </div>
               </div>
-              <div className="w-full md:w-48">
+              <div className="w-full md:w-56">
                 <Select value={statusFilter} onValueChange={setStatusFilter}>
                   <SelectTrigger>
                     <Filter className="h-4 w-4 mr-2" />
-                    <SelectValue placeholder="Statut paiement" />
+                    <SelectValue placeholder="Statut" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">Tous les statuts</SelectItem>
                     <SelectItem value="paid">Payé</SelectItem>
-                    <SelectItem value="partial">Partiel</SelectItem>
-                    <SelectItem value="unpaid">Non payé</SelectItem>
+                    <SelectItem value="partial">Partiellement payé</SelectItem>
+                    <SelectItem value="credit">Crédit</SelectItem>
+                    <SelectItem value="cancelled">Annulée</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
             </div>
           </CardContent>
         </Card>
+
         {/* Data Table */}
         <Card className="border-border hover:shadow-md transition-shadow">
           <CardHeader>
             <CardTitle className="flex items-center text-[#001F3F]">
               <Package className="h-5 w-5 mr-2" />
-              Liste des Reservation ( {filteredReservations.length} )
+              Liste des réservations ( {filteredReservations.length} )
             </CardTitle>
           </CardHeader>
           <CardContent>
@@ -182,38 +201,39 @@ const filteredReservations = allReservation.filter((reservation) => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="text-center">Voyage </TableHead>
-                    <TableHead>Expediteur</TableHead>
+                    <TableHead className="text-center">Voyage</TableHead>
+                    <TableHead>Expéditeur</TableHead>
                     <TableHead>Destinataire</TableHead>
                     <TableHead>Caissier</TableHead>
                     <TableHead className="text-right">Quantité</TableHead>
-                    <TableHead className="text-right">Poids Total (kg)</TableHead>
-                    <TableHead className="text-right">Prix Total</TableHead>
-                    <TableHead className="text-right">Montant Payer</TableHead>
-                    <TableHead className="text-right">Montant Restant</TableHead>
+                    <TableHead className="text-right">Poids total (kg)</TableHead>
+                    <TableHead className="text-right">Prix total</TableHead>
+                    <TableHead className="text-right">Montant payé</TableHead>
+                    <TableHead className="text-right">Montant restant</TableHead>
                     <TableHead className="text-center">Paiement</TableHead>
                     <TableHead className="text-center">Statut</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {filteredReservations.map((reservation , key) => {
-                    const trip = findTrip(reservation.tripId, alltrip);// retrouver le trip lié
-                    const paiement = configPaiement[getEtatPaiement(reservation)];
+                  {filteredReservations.map((reservation) => {
+                    const trip = findTrip(reservation.tripId, alltrip); // retrouver le trip lié
+                    const etatPaiement = getEtatPaiement(reservation);
+                    const paiement = etatPaiement ? configPaiement[etatPaiement] : null;
                     const statut = configStatut[normaliserStatut(reservation.status as string | undefined)];
                     return (
                       <TableRow
-                        key={key}
-                        className="hover:bg-gray-50"
+                        key={reservation.id}
+                        className="hover:bg-gray-50 cursor-pointer"
                         onClick={() => onShowDetailGoodsModal(reservation)}
                       >
                         <TableCell>
                           {trip
                             ? `${formatCityName(trip.from)} → ${formatCityName(trip.to)} (${new Date(trip.depart).toLocaleString('fr-FR', {
-                              day: "2-digit",
-                              month: "short",
-                              year: "numeric",
-                            })})`
-                            : "Voyage inconnu"}
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                              })})`
+                            : 'Voyage inconnu'}
                         </TableCell>
                         <TableCell>{reservation.clientName}</TableCell>
                         <TableCell>{reservation.destName}</TableCell>
@@ -224,9 +244,13 @@ const filteredReservations = allReservation.filter((reservation) => {
                         <TableCell className="text-right">{formatCurrency(reservation.amountPaid)}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.amountToPay)}</TableCell>
                         <TableCell className="text-center">
-                          <Badge variant="secondary" className={paiement.classe}>
-                            {paiement.libelle}
-                          </Badge>
+                          {paiement ? (
+                            <Badge variant="secondary" className={paiement.classe}>
+                              {paiement.libelle}
+                            </Badge>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
                         </TableCell>
                         <TableCell className="text-center">
                           <Badge variant="secondary" className={statut.classe}>
@@ -237,23 +261,31 @@ const filteredReservations = allReservation.filter((reservation) => {
                     );
                   })}
                 </TableBody>
-
               </Table>
             </div>
 
-            {allReservation.length === 0 && (
+            {filteredReservations.length === 0 && (
               <div className="text-center py-8">
                 <Package className="h-12 w-12 text-gray-400 mx-auto mb-3" />
-                <p className="text-gray-500">Aucune reservation trouvée</p>
+                <p className="text-gray-500">Aucune réservation trouvée</p>
               </div>
             )}
           </CardContent>
         </Card>
       </div>
-      {showDetailGoodsModal && (<ModalUpdateGood currentGoods={currentGoods} currentReservation={currentReservation} onClose={() => setShowDetailGoodsModal(false)} />)}
-      {showAddGoodsModal && (<ReservationForm onClose={() => setShowAddGoodsModal(false)} idReservation={idReservation} />)}
+
+      {showDetailGoodsModal && (
+        <ModalUpdateGood
+          currentGoods={currentGoods}
+          currentReservation={currentReservation}
+          onClose={() => setShowDetailGoodsModal(false)}
+        />
+      )}
+      {showAddGoodsModal && (
+        <ReservationForm onClose={() => setShowAddGoodsModal(false)} idReservation={idReservation} />
+      )}
     </div>
   );
-}
+};
 
 export default MarchandiseManagementPage;
