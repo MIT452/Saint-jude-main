@@ -72,18 +72,27 @@ const configPaiement: Record<EtatPaiement, { libelle: string; classe: string }> 
 };
 
 /* =========================
-   Statut affiché (déduit du paiement) :
+   Statut affiché selon le paiement :
    - Annulée / Refusée / Absent / Terminée → gardent leur statut
-   - Payé en totalité                      → Confirmée
-   - Partiellement payé ou Crédit          → En attente
+   - Crédit (0 Ar payé)       → En attente
+   - Partiellement payé       → bouton « Ajouter paiement » (voir le tableau)
+   - Payé                     → Confirmée
    (affichage uniquement, la base n'est pas modifiée)
 ========================= */
+const statutParPaiement: Record<EtatPaiement, StatutReservation> = {
+  CREDIT: 'EN_ATTENTE',
+  PARTIEL: 'EN_ATTENTE', // remplacé par le bouton « Ajouter paiement » dans le tableau
+  PAYE: 'CONFIRMEE',
+};
+
 const getStatutAffiche = (reservation: Reservation): StatutReservation => {
   const statutBrut = normaliserStatut(reservation.status as string | undefined);
 
+  // Annulée, Refusée, Absent, Terminée : on garde le statut de la base
   if (statutBrut !== 'EN_ATTENTE' && statutBrut !== 'CONFIRMEE') return statutBrut;
 
-  return getEtatPaiement(reservation) === 'PAYE' ? 'CONFIRMEE' : 'EN_ATTENTE';
+  const etat = getEtatPaiement(reservation);
+  return etat ? statutParPaiement[etat] : statutBrut;
 };
 
 /* =========================
@@ -104,7 +113,7 @@ const enregistrerPaiement = async (reservation: Reservation, montant: number): P
 };
 
 /* =========================
-   Fenêtre « Ajouter un paiement »
+   Fenêtre « Ajouter paiement »
 ========================= */
 type PaiementModalProps = {
   reservation: Reservation;
@@ -146,7 +155,7 @@ const PaiementModal = ({ reservation, onClose }: PaiementModalProps) => {
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
       <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-[#001F3F]">Ajouter un paiement</CardTitle>
+          <CardTitle className="text-[#001F3F]">Ajouter paiement</CardTitle>
           <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
@@ -342,7 +351,6 @@ const MarchandiseManagementPage = () => {
                     <TableHead className="text-right">Montant restant</TableHead>
                     <TableHead className="text-center">Paiement</TableHead>
                     <TableHead className="text-center">Statut</TableHead>
-                    <TableHead className="text-center">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -374,15 +382,17 @@ const MarchandiseManagementPage = () => {
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.totalPrice)}</TableCell>
                         <TableCell className="text-right">{formatCurrency(reservation.amountPaid)}</TableCell>
                         <TableCell className="text-right font-medium">{formatCurrency(reservation.amountToPay)}</TableCell>
+
+                        {/* Paiement : Crédit / Partiellement payé / Payé */}
                         <TableCell className="text-center">
                           {paiement ? (
                             <div className="flex flex-col items-center gap-1">
                               <Badge variant="secondary" className={paiement.classe}>
                                 {paiement.libelle}
                               </Badge>
-                              {etatPaiement === 'PARTIEL' && (
+                              {(etatPaiement === 'PARTIEL' || etatPaiement === 'CREDIT') && (
                                 <span className="text-xs text-gray-500">
-                                  Reste : {formatCurrency(reservation.amountToPay)}
+                                  {etatPaiement === 'CREDIT' ? 'À payer' : 'Reste'} : {formatCurrency(reservation.amountToPay)}
                                 </span>
                               )}
                             </div>
@@ -390,27 +400,24 @@ const MarchandiseManagementPage = () => {
                             <span className="text-gray-400">—</span>
                           )}
                         </TableCell>
+
+                        {/* Statut : bouton « Ajouter paiement » si partiellement payé */}
                         <TableCell className="text-center">
-                          <Badge variant="secondary" className={statut.classe}>
-                            {statut.libelle}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="text-center">
-                          {etatPaiement === 'PARTIEL' || etatPaiement === 'CREDIT' ? (
+                          {etatPaiement === 'PARTIEL' ? (
                             <Button
                               size="sm"
-                              variant="outline"
+                              className="bg-orange-500 text-white hover:bg-orange-600"
                               onClick={(e) => {
                                 e.stopPropagation(); // n'ouvre pas le détail de la ligne
                                 setReservationPaiement(reservation);
                               }}
                             >
-                              Ajouter un paiement
+                              Ajouter paiement
                             </Button>
-                          ) : etatPaiement === 'PAYE' ? (
-                            <span className="text-sm text-green-700">Soldé</span>
                           ) : (
-                            <span className="text-gray-400">—</span>
+                            <Badge variant="secondary" className={statut.classe}>
+                              {statut.libelle}
+                            </Badge>
                           )}
                         </TableCell>
                       </TableRow>
