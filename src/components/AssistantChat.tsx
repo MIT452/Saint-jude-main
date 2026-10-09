@@ -472,7 +472,9 @@ function getPoidsTotal(d: ReservationDraft): number | undefined {
 const needsWeightClarification = (d: ReservationDraft) =>
   !!d.quantite && d.quantite > 1 && d.poidsKg !== undefined && !d.poidsMode;
 
-function missingFields(d: ReservationDraft): string[] {
+type RequestKind = "passager" | "marchandise";
+
+function missingFields(d: ReservationDraft, kind: RequestKind | null = null): string[] {
   const miss: string[] = [];
   if (!d.depart) miss.push("le port de départ");
   if (!d.arrivee) miss.push("la destination");
@@ -480,7 +482,9 @@ function missingFields(d: ReservationDraft): string[] {
 
   const hasGoods = !!(d.marchandise || d.quantite || d.poidsKg);
   if (!d.passagers && !hasGoods) {
-    miss.push("les passagers ou la marchandise (type, quantité, poids)");
+    if (kind === "passager") miss.push("le nombre de passagers");
+    else if (kind === "marchandise") miss.push("la marchandise (type, quantité, poids)");
+    else miss.push("les passagers ou la marchandise (type, quantité, poids)");
   } else if (hasGoods) {
     if (!d.marchandise && !d.unite) miss.push("le type de marchandise");
     if (!d.quantite) miss.push("la quantité");
@@ -555,11 +559,18 @@ interface PushOptions {
 const HELP =
   "Je peux préparer une réservation. Exemple : « Réserver 2 colis de riz de 10 kg d’Antananarivo à Mahajanga le 12 octobre 2026 ». Je vous demande ce qui manque, je vous présente un récapitulatif, puis vous confirmez. La réservation n’est enregistrée qu’après validation par le système.";
 
-const STARTERS = [
-  "Réserver 2 colis de riz de 10 kg d’Antananarivo à Mahajanga demain",
-  "Réserver pour 3 passagers de Toamasina à Mahajanga",
-  "Quelles places sont disponibles ?",
-];
+// Démarrage guidé : aucune valeur imposée, c'est le client qui donne ses informations
+const GUIDED: Record<string, RequestKind> = {
+  "Billet passager": "passager",
+  "Transport de marchandises": "marchandise",
+};
+const GUIDED_CHOICES = Object.keys(GUIDED);
+
+// Simple exemple de formulation (non cliquable) : les vraies valeurs viennent du client
+const EXAMPLE_HINT =
+  "Exemple de formulation (à adapter à votre demande) : « Réserver 2 colis de riz de 10 kg d’Antananarivo à Mahajanga demain ».";
+
+const hasInfo = (d: ReservationDraft) => Object.values(d).some((v) => v !== undefined);
 
 export default function AssistantChat({
   reservation,
@@ -580,6 +591,7 @@ export default function AssistantChat({
   const awaitingConfirm = useRef(false); // récapitulatif présenté, attente de « oui »
   const awaitingWeight = useRef(false); // question « poids par colis ou total ? » posée
   const pendingCancel = useRef<ReservationRecord | null>(null); // annulation d'une réservation existante
+  const requestKind = useRef<RequestKind | null>(null); // type de demande choisi (passager / marchandise)
   const recognitionRef = useRef<any>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastReply = useRef("");
@@ -613,6 +625,26 @@ export default function AssistantChat({
     collecting.current = false;
     awaitingConfirm.current = false;
     awaitingWeight.current = false;
+    requestKind.current = null;
+  };
+
+  // Démarrage guidé : l'assistant pose la question, le client donne ses propres valeurs
+  const startGuided = (kind: RequestKind) => {
+    draftRef.current = {};
+    awaitingConfirm.current = false;
+    awaitingWeight.current = false;
+    requestKind.current = kind;
+    collecting.current = true;
+    if (kind === "passager") {
+      return push(
+        "assistant",
+        "Très bien, réservons un billet passager. Indiquez-moi votre port de départ, votre destination, la date du voyage et le nombre de passagers.\nVous pouvez tout dire en une phrase ou répondre étape par étape.",
+      );
+    }
+    return push(
+      "assistant",
+      "Très bien, préparons un transport de marchandises. Indiquez-moi le type de marchandise, la quantité, le poids, le port de départ, la destination et la date.\nVous pouvez tout dire en une phrase ou répondre étape par étape.",
+    );
   };
 
   // Lecture vocale de la réponse (retourne quand la phrase est terminée)
@@ -724,10 +756,11 @@ export default function AssistantChat({
     awaitingWeight.current = false;
     draftRef.current = merged;
 
-    const miss = missingFields(merged);
+    const miss = missingFields(merged, requestKind.current);
     if (miss.length) {
       awaitingConfirm.current = false;
-      return push("assistant", `${summarize(merged)}\n\nIl me manque : ${miss.join(", ")}.`);
+      const intro = hasInfo(merged) ? `${summarize(merged)}\n\n` : "";
+      return push("assistant", `${intro}Il me manque : ${miss.join(", ")}.`);
     }
 
     // Ambiguïté « poids par unité » ou « poids total » à lever avant le récapitulatif
@@ -815,6 +848,10 @@ export default function AssistantChat({
   };
 
   const handle = async (message: string) => {
+    // Démarrage guidé choisi par bouton (« Billet passager » / « Transport de marchandises »)
+    const guided = GUIDED[message];
+    if (guided && !awaitingConfirm.current && !pendingCancel.current) return startGuided(guided);
+
     const intent = detectIntent(message);
 
     // A. Réponse à une demande d'annulation d'une réservation existante
@@ -890,8 +927,8 @@ export default function AssistantChat({
     if ((intent === "confirmer" || intent === "refuser") && !collecting.current && !hasDraft()) {
       return push(
         "assistant",
-        "Il n’y a rien à confirmer pour le moment. Dites-moi quel trajet vous souhaitez réserver.",
-        { choices: STARTERS.slice(0, 2) },
+        "Il n’y a rien à confirmer pour le moment. Que souhaitez-vous réserver ?",
+        { choices: GUIDED_CHOICES },
       );
     }
 
@@ -900,6 +937,11 @@ export default function AssistantChat({
     if (collecting.current || (hasDraft() && intent !== "disponibilite")) {
       collecting.current = true;
       const merged = mergeDraft(draftRef.current, message, knownPlaces);
+
+      // Réponse « 3 » à la question sur le nombre de passagers
+      if (requestKind.current === "passager" && !merged.passagers && /^\d{1,3}$/.test(message.trim())) {
+        merged.passagers = Number(message.trim());
+      }
 
       // Une date passée est refusée
       if (merged.date && merged.date < iso(new Date())) {
@@ -990,16 +1032,20 @@ export default function AssistantChat({
                 </p>
               </div>
               <div className="flex w-full max-w-md flex-col gap-2">
-                {STARTERS.map((s) => (
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Que souhaitez-vous réserver ?
+                </p>
+                {GUIDED_CHOICES.map((s) => (
                   <button
                     key={s}
                     type="button"
                     onClick={() => void submitMessage(s, false)}
-                    className="rounded-xl border bg-white px-3 py-2 text-left text-sm shadow-sm transition hover:border-primary hover:bg-primary/5"
+                    className="rounded-xl border bg-white px-3 py-2.5 text-sm font-medium shadow-sm transition hover:border-primary hover:bg-primary/5"
                   >
                     {s}
                   </button>
                 ))}
+                <p className="mt-2 text-xs italic text-muted-foreground">{EXAMPLE_HINT}</p>
               </div>
             </div>
           )}
@@ -1098,7 +1144,7 @@ export default function AssistantChat({
           <input
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={listening ? "Je vous écoute…" : "Écrivez votre demande de réservation…"}
+            placeholder={listening ? "Je vous écoute…" : "Décrivez votre trajet, la date et ce que vous transportez…"}
             aria-label="Message pour l’IA"
             className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
