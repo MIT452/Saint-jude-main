@@ -1,4 +1,4 @@
-// src/utils/goodsIcons.ts
+﻿// src/utils/goodsIcons.ts
 // Icône de marchandise 100 % automatique : l'IA (Groq via le backend) choisit UN emoji selon le nom.
 // Aucun dictionnaire, aucune catégorie prédéfinie.
 // Le résultat est mémorisé (navigateur + Neon) : un même nom n'est demandé qu'une fois à l'IA.
@@ -20,9 +20,12 @@ const isEmoji = (v: unknown): v is string =>
   typeof v === "string" && v.length > 0 && v.length <= 16 && EMOJI_RE.test(v);
 
 // --- Configuration de l'appel au backend (Render) ---
+// Accepte « https://host », « https://host/ » et « https://host/api » :
+// le chemin /api/ai/goods-icon est ajouté plus bas, il ne doit donc pas être en double.
 const getApiUrl = (): string => {
   const env = (import.meta as any).env ?? {};
-  return String(env.VITE_API_URL ?? env.VITE_API_BASE_URL ?? "");
+  const raw = String(env.VITE_API_URL ?? env.VITE_API_BASE_URL ?? "");
+  return raw.replace(/\/+$/, "").replace(/\/api$/, "");
 };
 const getToken = (): string => {
   try {
@@ -33,7 +36,8 @@ const getToken = (): string => {
 };
 
 // --- Mémoire côté navigateur ---
-const STORAGE_KEY = "stjude_goods_icon_cache_v2";
+// v3 : efface les 📦 de secours mémorisés par erreur avec les versions précédentes
+const STORAGE_KEY = "stjude_goods_icon_cache_v3";
 const memoryCache = new Map<string, string>();
 const inFlight = new Map<string, Promise<string>>();
 let storageLoaded = false;
@@ -83,6 +87,7 @@ async function callBackend(name: string, timeoutMs: number): Promise<string | nu
     });
     if (!r.ok) return null;
     const data = await r.json();
+    if (data?.fallback) return null; // icône de secours du serveur : ne pas mémoriser
     return isEmoji(data?.icon) ? (data.icon as string) : null;
   } catch {
     return null;
