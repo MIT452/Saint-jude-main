@@ -1,8 +1,8 @@
 // src/components/GoodsIcon.tsx
-// Petite icône ronde d'une marchandise. Utilisable partout :
-// <GoodsIcon name={good.itemName} />
+// Petite icône ronde d'une marchandise, choisie automatiquement par l'IA selon le nom.
+// Utilisable partout : <GoodsIcon name={good.itemName} />
 import { useEffect, useState, FC } from "react";
-import { ICONS, getKnownIconKey, resolveIconKey } from "../utils/goodsIcons";
+import { FALLBACK_ICON, getKnownIcon, resolveIcon } from "../utils/goodsIcons";
 
 interface GoodsIconProps {
   name: string;
@@ -10,18 +10,23 @@ interface GoodsIconProps {
 }
 
 const GoodsIcon: FC<GoodsIconProps> = ({ name, className = "" }) => {
-  const [key, setKey] = useState<string>(() => getKnownIconKey(name) ?? "package");
+  const [icon, setIcon] = useState<string>(() => getKnownIcon(name) ?? FALLBACK_ICON);
+  const [loading, setLoading] = useState<boolean>(() => !getKnownIcon(name));
 
   useEffect(() => {
     let cancelled = false;
-    const known = getKnownIconKey(name);
+    const known = getKnownIcon(name);
     if (known) {
-      setKey(known);
+      setIcon(known);
+      setLoading(false);
       return;
     }
-    setKey("package"); // affichage immédiat du secours, puis l'IA corrige
-    resolveIconKey(name).then((k) => {
-      if (!cancelled) setKey(k);
+    setIcon(FALLBACK_ICON);
+    setLoading(true);
+    resolveIcon(name).then((i) => {
+      if (cancelled) return;
+      setIcon(i);
+      setLoading(false);
     });
     return () => {
       cancelled = true;
@@ -30,11 +35,11 @@ const GoodsIcon: FC<GoodsIconProps> = ({ name, className = "" }) => {
 
   return (
     <span
-      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ${className}`}
+      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-100 text-lg ${loading ? "animate-pulse" : ""} ${className}`}
       title={name}
       aria-label={name}
     >
-      {ICONS[key] ?? ICONS.package}
+      {icon}
     </span>
   );
 };
