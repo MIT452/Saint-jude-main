@@ -23,6 +23,7 @@ import { findBoat, findTrip } from "../Tools/Tools";
 import { inputFields } from "./goodsForms";
 import { onAddService } from "../data/service";
 import ConfirmDialog from "./ConfirmDialog";
+import GoodsIcon from "./GoodsIcon";
 
 interface ReservationFormProps {
   onClose: () => void;
@@ -278,7 +279,7 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
         return;
       }
 
-      // 3) Marchandises
+      // 3) Marchandises (l'icône est calculée à l'affichage : rien de plus n'est envoyé au backend)
       for (const good of currentGoods) {
         const goodResult = await onAddService(TABLE_DATA_BASE.GOODS, good);
         if (goodResult !== "success") {
@@ -551,7 +552,12 @@ const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) =
                         <td className="px-3 py-2 text-left whitespace-nowrap">
                           <span className="inline-flex items-center gap-2"><User className="h-4 w-4 text-primary" />{formData.senderName || "—"}</span>
                         </td>
-                        <td className="px-3 py-2 text-left font-medium">{good.itemName}</td>
+                        <td className="px-3 py-2 text-left font-medium">
+                          <span className="inline-flex items-center gap-2">
+                            <GoodsIcon name={String(good.itemName ?? "")} />
+                            {good.itemName}
+                          </span>
+                        </td>
                         <td className="px-3 py-2 whitespace-nowrap">
                           <span className="inline-flex items-center gap-2"><User className="h-4 w-4 text-primary" />{cashierName}</span>
                         </td>
