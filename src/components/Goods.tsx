@@ -8,7 +8,7 @@ import { Plus, Search, Filter, Package, X } from 'lucide-react';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux';
 import { findBoat, findTrip, formatCityName, formatCurrency } from '../Tools/Tools';
-import ReservationForm from './GoodsForms';
+import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
 import { Badge } from './ui/badge';
