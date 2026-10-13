@@ -1,4 +1,4 @@
-﻿// src/utils/goodsIcons.ts
+// src/utils/goodsIcons.ts
 // Icône de marchandise 100 % automatique : l'IA (Groq via le backend) choisit UN emoji selon le nom.
 // Aucun dictionnaire, aucune catégorie prédéfinie.
 // Le résultat est mémorisé (navigateur + Neon) : un même nom n'est demandé qu'une fois à l'IA.
@@ -88,6 +88,7 @@ async function callBackend(name: string, timeoutMs: number): Promise<string | nu
     if (!r.ok) return null;
     const data = await r.json();
     if (data?.fallback) return null; // icône de secours du serveur : ne pas mémoriser
+    if (data?.fallback) return null;
     return isEmoji(data?.icon) ? (data.icon as string) : null;
   } catch {
     return null;
