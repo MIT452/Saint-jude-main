@@ -4,6 +4,7 @@ import {
   Fuel,
   MapPin,
   Package,
+  ScanSearch,
   Ship,
   User,
   Users,
@@ -66,5 +67,19 @@ export const menuItems = [
     icon: Fuel,
     description: "Gestion Carburant",
     permission: "fueldManage:manage" as Permission,
+  },
+  {
+    id: "intelligence",
+    label: "Dashboard Intelligent",
+    icon: ScanSearch,
+    description: "Chatbot, GPS, monitoring et optimisation",
+    permission: "intelligence:read" as Permission,
+  },
+  {
+    id: "reservations",
+    label: "Réservations multimodales",
+    icon: Package,
+    description: "Réservation, IA, voix et notifications",
+    permission: "merchandise:manage" as Permission,
   },
 ];

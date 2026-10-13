@@ -25,6 +25,7 @@ export const tripVoid: Trip = {
   id: "",
   status: "Arriver",
   to: "",
+  userId: "",
 };
 export const boatVoid: Boat = {
   capacity: 0,
@@ -32,6 +33,7 @@ export const boatVoid: Boat = {
   id: "",
   name: "",
   state: "En service",
+  userId: "",
 };
 export const goodVoid: Goods = {
   amountToPay: 0,
