@@ -24,6 +24,10 @@ import {
   type NotificationChannel,
   type ReservationRecord,
 } from "../services/reservationService";
+import {
+  createAssistantReservation,
+  verifyAssistantReservation,
+} from "../services/assistantReservationService";
 import { formatCurrency } from "../Tools/Tools";
 import AssistantChat from "./AssistantChat";
 import PassengerReservation from "./PassengerReservation";
@@ -106,6 +110,12 @@ export default function ReservationExperience() {
     );
   }, [reservations, search]);
 
+  // Ports connus (noms des trajets) : l'assistant les reconnaît plus sûrement
+  const knownPlaces = useMemo(
+    () => Array.from(new Set(trip.flatMap((item) => [item.from, item.to]).filter(Boolean))),
+    [trip]
+  );
+
   const refreshReservations = async () => {
     setIsLoading(true);
     setErrorStatus("");
@@ -140,6 +150,14 @@ export default function ReservationExperience() {
     } catch (error) {
       setErrorStatus(`Échec de l’ajout de la réservation : ${getErrorMessage(error)}`);
     }
+  };
+
+  // Appelé par l'assistant IA : la réservation est déjà enregistrée (backend + liste), on met seulement l'affichage à jour
+  const handleAssistantCreated = (saved: ReservationRecord) => {
+    setErrorStatus("");
+    setReservations((current) => [saved, ...current.filter((item) => item.id !== saved.id)]);
+    setSelectedReservation(saved);
+    setStatus(`Réservation ajoutée en attente de confirmation : ${saved.clientName}.`);
   };
 
   const handleConfirm = async () => {
@@ -334,7 +352,15 @@ export default function ReservationExperience() {
         </div>
       )}
 
-      {activeTab === "assistant" && <AssistantChat reservation={selectedReservation ?? undefined} />}
+      {activeTab === "assistant" && (
+        <AssistantChat
+          reservation={selectedReservation ?? undefined}
+          knownPlaces={knownPlaces}
+          verifyReservation={verifyAssistantReservation}
+          createReservation={createAssistantReservation}
+          onReservationCreated={handleAssistantCreated}
+        />
+      )}
       {activeTab === "availability" && <AvailabilityPanel trip={trip} boat={boat} />}
       {activeTab === "recurrent" && <RecurrentPanel />}
       {activeTab === "group" && <GroupPanel />}
