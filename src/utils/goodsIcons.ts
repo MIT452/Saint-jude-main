@@ -81,7 +81,8 @@ async function callBackend(name: string, timeoutMs: number): Promise<string | nu
   try {
     const r = await fetch(`${apiUrl}/api/ai/goods-icon`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${getToken()}` },
+      headers: { "Content-Type": "application/json", ...(getToken() ? { Authorization: `Bearer ${getToken()}` } : {}) },
+      credentials: "include",
       body: JSON.stringify({ name }),
       signal: controller.signal,
     });
