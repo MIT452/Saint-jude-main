@@ -1,10 +1,24 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Bot, CheckCircle2, Mic, MicOff, Send, ShieldCheck, Sparkles, User } from "lucide-react";
+import {
+  Bot,
+  CheckCheck,
+  CheckCircle2,
+  HelpCircle,
+  Mic,
+  MicOff,
+  Paperclip,
+  PlusSquare,
+  Send,
+  Ship,
+  User,
+  Zap,
+  ClipboardList,
+} from "lucide-react";
 import { askAssistant } from "../data/intelligenceService";
 import type { ReservationRecord } from "../services/reservationService";
 import { formatCurrency } from "../Tools/Tools";
 import { Button } from "./ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Card, CardContent, CardHeader } from "./ui/card";
 import {
   DAYS,
   GUIDED,
@@ -123,6 +137,8 @@ interface ChatMessage {
   recap?: RecapData;
   /** Message de succès (réservation enregistrée / annulée). */
   success?: boolean;
+  /** Message d'accueil avec la liste d'exemples. */
+  welcome?: boolean;
 }
 
 interface PushOptions {
@@ -134,9 +150,27 @@ interface PushOptions {
 const HELP =
   "Je peux préparer une réservation : dites-moi librement ce que vous souhaitez (billet passager ou envoi de marchandises, ports, date, quantité, poids), dans l’ordre que vous voulez. Je vous demande seulement ce qui manque, une information à la fois, puis je vérifie le trajet, la capacité et le tarif, et je vous présente un récapitulatif. La réservation n’est enregistrée qu’après votre confirmation et la validation par le système.";
 
-// Aucune valeur imposée : le client choisit sa marchandise, ses ports, sa quantité...
-const EXAMPLE_HINT =
-  "Parlez librement : dites ce que vous voulez envoyer, d’où, vers où, la quantité, le poids et la date, dans l’ordre que vous voulez. Je vous demanderai seulement ce qui manque.";
+const WELCOME_EXAMPLES = [
+  "Quelle est la disponibilité du bateau Arcanum ?",
+  "Montre-moi les réservations en attente",
+  "Comment ajouter une nouvelle réservation ?",
+];
+
+// Suggestions rapides (comme sur la capture)
+const QUICK_SUGGESTIONS: Array<{ label: string; message: string; icon: typeof Ship }> = [
+  { label: "Vérifier un autre bateau", message: "Vérifier la disponibilité d'un autre bateau", icon: Ship },
+  { label: "Voir les réservations en attente", message: "Montre-moi les réservations en attente", icon: ClipboardList },
+  { label: "Ajouter une réservation", message: "Je veux faire une réservation", icon: PlusSquare },
+  { label: "Aide / Guide", message: "aide", icon: HelpCircle },
+];
+
+const makeWelcome = (): ChatMessage => ({
+  id: newId(),
+  role: "assistant",
+  content: "Bonjour ! 👋 Je suis votre assistant IA pour les réservations.",
+  time: nowLabel(),
+  welcome: true,
+});
 
 export default function AssistantChat({
   reservation,
@@ -147,7 +181,7 @@ export default function AssistantChat({
   createReservation,
   cancelReservation,
 }: AssistantChatProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => [makeWelcome()]);
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [listening, setListening] = useState(false);
@@ -607,78 +641,69 @@ export default function AssistantChat({
   const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
 
   return (
-    <Card className="flex h-full flex-col overflow-hidden border-slate-200 shadow-sm">
-      <CardHeader className="border-b bg-gradient-to-r from-primary/10 via-primary/5 to-transparent py-4">
-        <CardTitle className="flex items-center gap-3 text-base">
-          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-primary text-primary-foreground shadow">
-            <Bot className="h-5 w-5" />
-          </span>
-          <span className="flex flex-col">
-            <span className="font-semibold leading-tight">Assistant Saint-Jude</span>
-            <span className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
-              <span className="h-2 w-2 rounded-full bg-emerald-500" />
-              En ligne
-              <span className="mx-1">·</span>
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Confirmation requise avant enregistrement
+    <Card className="flex h-full flex-col overflow-hidden rounded-2xl border border-blue-100 bg-blue-50/40 shadow-sm">
+      {/* En-tête : avatar, titre, statut, badges */}
+      <CardHeader className="border-b border-blue-100 bg-gradient-to-r from-blue-50 to-white px-5 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-700 ring-4 ring-blue-50">
+              <Bot className="h-8 w-8" />
             </span>
-          </span>
-        </CardTitle>
+            <div className="min-w-0">
+              <h2 className="text-xl font-semibold leading-tight text-slate-900">
+                Assistant IA – Réservations
+              </h2>
+              <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-xs text-slate-500">
+                <span className="inline-flex items-center gap-1.5 font-medium text-emerald-600">
+                  <span className="h-2 w-2 rounded-full bg-emerald-500" />
+                  En ligne
+                </span>
+                <span>
+                  Je peux vous aider à gérer vos réservations, vérifier la disponibilité des bateaux
+                  et répondre à vos questions.
+                </span>
+              </p>
+            </div>
+          </div>
+          <div className="hidden shrink-0 items-center gap-3 sm:flex">
+            <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-200 bg-white px-3.5 py-1.5 text-sm font-bold text-slate-800 shadow-sm">
+              <span className="flex h-4 w-4 items-center justify-center rounded-full bg-red-500 text-[8px] font-bold text-white">
+                G
+              </span>
+              Groq
+            </span>
+            <span className="rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
+              Mode conversationnel
+            </span>
+          </div>
+        </div>
       </CardHeader>
 
-      <CardContent className="flex h-[520px] flex-col gap-3 bg-slate-50/60 p-4">
-        <div className="flex-1 space-y-4 overflow-y-auto pr-1">
-          {messages.length === 0 && (
-            <div className="flex h-full flex-col items-center justify-center gap-4 text-center">
-              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-primary/10 text-primary">
-                <Sparkles className="h-6 w-6" />
-              </span>
-              <div>
-                <p className="font-medium">Bonjour, comment puis-je vous aider ?</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Je prépare votre réservation, je vérifie les données et vous confirmez.
-                </p>
-              </div>
-              <div className="flex w-full max-w-md flex-col gap-2">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                  Que souhaitez-vous réserver ?
-                </p>
-                {GUIDED_CHOICES.map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => void submitMessage(s, false)}
-                    className="rounded-xl border bg-white px-3 py-2.5 text-sm font-medium shadow-sm transition hover:border-primary hover:bg-primary/5"
-                  >
-                    {s}
-                  </button>
-                ))}
-                <p className="mt-2 text-xs italic text-muted-foreground">{EXAMPLE_HINT}</p>
-              </div>
-            </div>
-          )}
-
+      <CardContent className="flex h-[560px] flex-col gap-3 p-0">
+        {/* Messages */}
+        <div className="flex-1 space-y-5 overflow-y-auto px-5 pb-2 pt-5">
           {messages.map((m) => {
             const mine = m.role === "user";
-            const showChoices = !isLoading && m.id === lastMessageId && !!m.choices?.length;
+            const isLast = m.id === lastMessageId;
+            const showChoices = !isLoading && isLast && !!m.choices?.length;
             return (
-              <div key={m.id} className={`flex items-end gap-2 ${mine ? "flex-row-reverse" : ""}`}>
+              <div key={m.id} className={`flex items-end gap-3 ${mine ? "flex-row-reverse" : ""}`}>
                 <span
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full ${
-                    mine ? "bg-primary text-primary-foreground" : "bg-white text-primary shadow-sm ring-1 ring-slate-200"
+                  className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                    mine ? "bg-blue-600 text-white" : "bg-blue-100 text-blue-700"
                   }`}
                 >
-                  {mine ? <User className="h-4 w-4" /> : <Bot className="h-4 w-4" />}
+                  {mine ? <User className="h-5 w-5" /> : <Bot className="h-5 w-5" />}
                 </span>
 
-                <div className={`flex max-w-[82%] flex-col gap-2 ${mine ? "items-end" : "items-start"}`}>
+                <div className={`flex max-w-[78%] flex-col gap-2 ${mine ? "items-end" : "items-start"}`}>
                   <div
-                    className={`whitespace-pre-line rounded-2xl px-4 py-2.5 text-sm leading-relaxed shadow-sm ${
+                    className={`relative whitespace-pre-line rounded-2xl px-4 py-3 text-sm leading-relaxed ${
                       mine
-                        ? "rounded-br-sm bg-primary text-primary-foreground"
+                        ? "rounded-br-md bg-blue-600 text-white shadow-md"
                         : m.success
-                          ? "rounded-bl-sm border border-emerald-200 bg-emerald-50 text-emerald-900"
-                          : "rounded-bl-sm bg-white text-slate-800 ring-1 ring-slate-200"
+                          ? "rounded-bl-md border border-emerald-200 bg-emerald-50 text-emerald-900"
+                          : "rounded-bl-md bg-blue-100/70 text-slate-800"
                     }`}
                   >
                     {m.success && (
@@ -687,23 +712,50 @@ export default function AssistantChat({
                       </span>
                     )}
                     {m.content}
+
+                    {m.welcome && (
+                      <div className="mt-2">
+                        <p>Vous pouvez me poser des questions comme :</p>
+                        <ul className="my-1.5 list-disc space-y-1 pl-5">
+                          {WELCOME_EXAMPLES.map((ex) => (
+                            <li key={ex}>“{ex}”</li>
+                          ))}
+                        </ul>
+                        <p>Je suis là pour vous aider !</p>
+                      </div>
+                    )}
+
+                    <span
+                      className={`mt-1 block text-right text-[11px] ${
+                        mine ? "text-blue-100" : "text-slate-400"
+                      }`}
+                    >
+                      {m.time}
+                    </span>
                   </div>
 
+                  {mine && (
+                    <span className="flex items-center gap-1 px-1 text-[11px] text-slate-400">
+                      {m.time}
+                      <CheckCheck className="h-3.5 w-3.5 text-blue-500" />
+                    </span>
+                  )}
+
                   {m.recap && (
-                    <div className="w-full min-w-[260px] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-slate-200">
-                      <div className="bg-primary/10 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-primary">
+                    <div className="w-full min-w-[280px] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-blue-100">
+                      <div className="bg-blue-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
                         Récapitulatif
                       </div>
                       <dl className="divide-y text-sm">
                         {m.recap.rows.map(([label, value]) => (
                           <div key={label} className="flex justify-between gap-4 px-4 py-2">
-                            <dt className="text-muted-foreground">{label}</dt>
+                            <dt className="text-slate-500">{label}</dt>
                             <dd className="text-right font-medium">{value}</dd>
                           </div>
                         ))}
                         <div className="flex justify-between gap-4 bg-slate-50 px-4 py-2.5">
                           <dt className="font-medium">Prix total</dt>
-                          <dd className="text-right font-semibold text-primary">{m.recap.price}</dd>
+                          <dd className="text-right font-semibold text-blue-700">{m.recap.price}</dd>
                         </div>
                       </dl>
                     </div>
@@ -716,51 +768,79 @@ export default function AssistantChat({
                           key={c}
                           type="button"
                           onClick={() => void submitMessage(c, false)}
-                          className="rounded-full border border-primary/40 bg-white px-3.5 py-1.5 text-sm font-medium text-primary shadow-sm transition hover:bg-primary hover:text-primary-foreground"
+                          className="rounded-full border border-blue-300 bg-white px-3.5 py-1.5 text-sm font-medium text-blue-700 shadow-sm transition hover:bg-blue-600 hover:text-white"
                         >
                           {c}
                         </button>
                       ))}
                     </div>
                   )}
-
-                  <span className="px-1 text-[11px] text-muted-foreground">{m.time}</span>
                 </div>
               </div>
             );
           })}
 
           {isLoading && (
-            <div className="flex items-end gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white text-primary shadow-sm ring-1 ring-slate-200">
-                <Bot className="h-4 w-4" />
+            <div className="flex items-end gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700">
+                <Bot className="h-5 w-5" />
               </span>
-              <div className="flex items-center gap-1 rounded-2xl rounded-bl-sm bg-white px-4 py-3 shadow-sm ring-1 ring-slate-200">
-                <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.3s]" />
-                <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400 [animation-delay:-0.15s]" />
-                <span className="h-2 w-2 animate-bounce rounded-full bg-slate-400" />
+              <div className="flex items-center gap-1 rounded-2xl rounded-bl-md bg-blue-100/70 px-4 py-3.5">
+                <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400 [animation-delay:-0.3s]" />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400 [animation-delay:-0.15s]" />
+                <span className="h-2 w-2 animate-bounce rounded-full bg-blue-400" />
               </div>
             </div>
           )}
           <div ref={bottomRef} />
         </div>
 
+        {/* Suggestions rapides */}
+        <div className="px-5">
+          <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
+            <Zap className="h-4 w-4 fill-blue-600 text-blue-600" />
+            Suggestions rapides
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {QUICK_SUGGESTIONS.map(({ label, message, icon: Icon }) => (
+              <button
+                key={label}
+                type="button"
+                disabled={isLoading}
+                onClick={() => void submitMessage(message, false)}
+                className="inline-flex items-center gap-2 rounded-full border border-blue-200 bg-white px-4 py-2 text-sm font-medium text-blue-700 shadow-sm transition hover:border-blue-400 hover:bg-blue-50 disabled:opacity-60"
+              >
+                <Icon className="h-4 w-4" />
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Zone de saisie */}
         <form
-          className="flex items-center gap-2 rounded-full border bg-white py-1.5 pl-4 pr-1.5 shadow-sm focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20"
+          className="flex items-center gap-3 border-t border-blue-100 bg-white px-5 py-4"
           onSubmit={sendMessage}
         >
+          <button
+            type="button"
+            className="text-slate-400 transition hover:text-blue-600"
+            aria-label="Joindre un fichier"
+          >
+            <Paperclip className="h-5 w-5" />
+          </button>
           <input
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
-            placeholder={listening ? "Je vous écoute…" : "Écrivez votre demande avec vos propres mots…"}
+            placeholder={listening ? "Je vous écoute…" : "Écrivez votre question ici..."}
             aria-label="Message pour l’IA"
-            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            className="h-12 min-w-0 flex-1 rounded-full border border-slate-200 bg-white px-5 text-sm outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
           />
           <Button
             type="button"
             size="icon"
             variant={listening ? "destructive" : "ghost"}
-            className="h-9 w-9 rounded-full"
+            className="h-10 w-10 rounded-full"
             onClick={toggleMic}
             aria-label={listening ? "Arrêter la dictée" : "Dicter un message"}
           >
@@ -769,11 +849,11 @@ export default function AssistantChat({
           <Button
             type="submit"
             size="icon"
-            className="h-9 w-9 rounded-full"
+            className="h-12 w-12 rounded-full bg-blue-600 text-white shadow-md hover:bg-blue-700"
             disabled={isLoading || !question.trim()}
             aria-label="Envoyer"
           >
-            <Send className="h-4 w-4" />
+            <Send className="h-5 w-5" />
           </Button>
         </form>
       </CardContent>
