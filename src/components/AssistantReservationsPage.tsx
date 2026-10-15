@@ -16,7 +16,15 @@ import type { ReservationRecord } from "../services/reservationService";
 import { Card, CardContent } from "./ui/card";
 import AssistantChat, { type AssistantChatProps } from "./AssistantChat";
 // Photo par défaut des bateaux : enregistre ton image dans src/assets/boat-default.jpg
-import defaultBoatImage from "../assets/boat-default.jpg";
+import arcanumImage from "../assets/arcanum.png";
+import ericImage from "../assets/eric.png";
+
+// Photo par bateau (nom en minuscules) ; arcanum.png sert aussi d'image par défaut
+const defaultBoatImage = arcanumImage;
+const BOAT_IMAGES: Record<string, string> = {
+  arcanum: arcanumImage,
+  eric: ericImage,
+};
 
 /* =========================================================
    Types d'affichage
@@ -279,7 +287,9 @@ export default function AssistantReservationsPage({
         name: String(raw.name ?? ""),
         capacity: `${raw.capacity ?? "-"} T`,
         maintenance: norm(state).includes("maint"),
-        image: resolveImage((raw.image ?? raw.photo ?? raw.image_url) as string | undefined),
+        image:
+          BOAT_IMAGES[String(raw.name ?? "").trim().toLowerCase()] ??
+          resolveImage((raw.image ?? raw.photo ?? raw.image_url) as string | undefined),
       };
     });
   }, [boat, demo]);
