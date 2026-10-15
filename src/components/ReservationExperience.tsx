@@ -1,16 +1,22 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useSelector } from "react-redux";
 import {
+  Anchor,
   BellRing,
+  Bot,
   CalendarClock,
+  CalendarDays,
   CheckCircle2,
+  ChevronRight,
   MapPin,
   MessageCircle,
   Package,
   RefreshCcw,
+  Search,
   Send,
   Ship,
   Sparkles,
+  User,
   Users,
   Volume2,
 } from "lucide-react";
@@ -87,6 +93,23 @@ const getReservationDate = (reservation: ReservationRecord): string => {
 
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Erreur inconnue";
+
+// Date au format yyyy-mm-dd pour les champs <input type="date">
+const toInputDate = (date: Date) => date.toISOString().slice(0, 10);
+
+const formatDateTime = (value: string) => {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return "—";
+  const date = parsed.toLocaleDateString("fr-FR");
+  const time = parsed.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  return `${date} ${time}`;
+};
+
+// Champs optionnels selon vos types (image, capitaine...) : lecture sécurisée
+const readField = (source: unknown, key: string): string => {
+  const value = (source as Record<string, unknown> | undefined)?.[key];
+  return typeof value === "string" ? value : "";
+};
 
 export default function ReservationExperience() {
   const { trip, boat } = useSelector((state: RootState) => state.stJude);
@@ -366,7 +389,14 @@ export default function ReservationExperience() {
           }
         />
       )}
-      {activeTab === "availability" && <AvailabilityPanel trip={trip} boat={boat} />}
+      {activeTab === "availability" && (
+        <AvailabilityPanel
+          trip={trip}
+          boat={boat}
+          reservations={reservations}
+          onOpenAssistant={() => setActiveTab("assistant")}
+        />
+      )}
       {activeTab === "recurrent" && <RecurrentPanel />}
       {activeTab === "group" && <GroupPanel />}
       {activeTab === "predictive" && <PredictivePanel />}
@@ -523,39 +553,383 @@ function StatusMessage({
   );
 }
 
-function AvailabilityPanel({ trip, boat }: { trip: Trip[]; boat: Boat[] }) {
+/* =========================
+   Onglet Disponibilité
+========================= */
+
+const ALL = "all";
+
+interface AvailabilityFilters {
+  from: string;
+  to: string;
+  start: string;
+  end: string;
+  boatId: string;
+  captain: string;
+}
+
+function AvailabilityPanel({
+  trip,
+  boat,
+  reservations = [],
+  onOpenAssistant,
+}: {
+  trip: Trip[];
+  boat: Boat[];
+  reservations?: ReservationRecord[];
+  onOpenAssistant?: () => void;
+}) {
+  const today = new Date();
+  const defaultFilters: AvailabilityFilters = {
+    from: ALL,
+    to: ALL,
+    start: toInputDate(today),
+    end: toInputDate(new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000)),
+    boatId: ALL,
+    captain: ALL,
+  };
+
+  // draft = valeurs en cours de saisie ; applied = valeurs appliquées par « Rechercher »
+  const [draft, setDraft] = useState<AvailabilityFilters>(defaultFilters);
+  const [applied, setApplied] = useState<AvailabilityFilters>(defaultFilters);
+
+  const ports = useMemo(
+    () => Array.from(new Set(trip.flatMap((item) => [item.from, item.to]).filter(Boolean))),
+    [trip]
+  );
+
+  const captains = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          boat
+            .map((item) => readField(item, "captain") || readField(item, "captainName"))
+            .filter(Boolean)
+        )
+      ),
+    [boat]
+  );
+
+  const boatById = useMemo(() => new Map(boat.map((item) => [String(item.id), item])), [boat]);
+
+  // Places restantes = capacité du bateau - passagers des réservations non annulées sur le même trajet
+  const placesLeft = (item: Trip) => {
+    const current = boatById.get(String(item.boatId));
+    if (!current) return 0;
+    const taken = reservations
+      .filter(
+        (r) => r.departure === item.from && r.destination === item.to && !estAnnulee(r.status)
+      )
+      .reduce((sum, r) => sum + (Number(r.passengers) || 0), 0);
+    return Math.max(0, current.capacity - taken);
+  };
+
+  const filteredTrips = useMemo(() => {
+    const start = applied.start ? new Date(`${applied.start}T00:00:00`) : null;
+    const end = applied.end ? new Date(`${applied.end}T23:59:59`) : null;
+
+    return trip
+      .filter((item) => {
+        const departDate = new Date(item.depart);
+        const current = boatById.get(String(item.boatId));
+        const captain = current
+          ? readField(current, "captain") || readField(current, "captainName")
+          : "";
+
+        if (applied.from !== ALL && item.from !== applied.from) return false;
+        if (applied.to !== ALL && item.to !== applied.to) return false;
+        if (applied.boatId !== ALL && String(item.boatId) !== applied.boatId) return false;
+        if (applied.captain !== ALL && captain !== applied.captain) return false;
+        if (!Number.isNaN(departDate.getTime())) {
+          if (start && departDate < start) return false;
+          if (end && departDate > end) return false;
+        }
+        return true;
+      })
+      .sort((a, b) => new Date(a.depart).getTime() - new Date(b.depart).getTime());
+  }, [trip, applied, boatById]);
+
+  const totalPlaces = filteredTrips.reduce((sum, item) => sum + placesLeft(item), 0);
+  const activeBoats = new Set(filteredTrips.map((item) => String(item.boatId))).size;
+  const reservationDays = Math.max(
+    0,
+    Math.round(
+      (new Date(applied.end).getTime() - new Date(applied.start).getTime()) / (24 * 60 * 60 * 1000)
+    )
+  );
+
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Réservation par disponibilité</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-sm text-muted-foreground">Les voyages disponibles sont filtrés automatiquement.</p>
-        <div className="grid gap-3 md:grid-cols-2">
-          {trip.slice(0, 4).map((item) => {
-            const currentBoat = boat.find((candidate) => candidate.id === item.boatId);
-            return (
-              <div key={item.id} className="rounded-lg border p-4">
-                <div className="flex items-center gap-2 font-medium">
-                  <MapPin className="h-4 w-4" /> {item.from} → {item.to}
-                </div>
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {new Date(item.depart).toLocaleString("fr-FR")}
+    <div className="space-y-5">
+      {/* ===== Filtres ===== */}
+      <Card className="bg-blue-50/60">
+        <CardContent className="grid items-end gap-3 p-4 md:grid-cols-2 lg:grid-cols-[1fr_1fr_1.4fr_1.2fr_1.2fr_auto]">
+          <div className="space-y-1">
+            <Label className="font-semibold">Départ</Label>
+            <Select value={draft.from} onValueChange={(value) => setDraft({ ...draft, from: value })}>
+              <SelectTrigger>
+                <MapPin className="mr-2 h-4 w-4 text-primary" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tous les ports</SelectItem>
+                {ports.map((port) => (
+                  <SelectItem key={port} value={port}>
+                    {port}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="font-semibold">Arrivée</Label>
+            <Select value={draft.to} onValueChange={(value) => setDraft({ ...draft, to: value })}>
+              <SelectTrigger>
+                <MapPin className="mr-2 h-4 w-4 text-primary" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tous les ports</SelectItem>
+                {ports.map((port) => (
+                  <SelectItem key={port} value={port}>
+                    {port}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="font-semibold">Période</Label>
+            <div className="flex items-center gap-2">
+              <CalendarDays className="h-4 w-4 shrink-0 text-primary" />
+              <Input
+                type="date"
+                value={draft.start}
+                max={draft.end}
+                onChange={(event) => setDraft({ ...draft, start: event.target.value })}
+              />
+              <span className="text-muted-foreground">–</span>
+              <Input
+                type="date"
+                value={draft.end}
+                min={draft.start}
+                onChange={(event) => setDraft({ ...draft, end: event.target.value })}
+              />
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="font-semibold">Bateau</Label>
+            <Select value={draft.boatId} onValueChange={(value) => setDraft({ ...draft, boatId: value })}>
+              <SelectTrigger>
+                <Ship className="mr-2 h-4 w-4 text-primary" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tous les bateaux</SelectItem>
+                {boat.map((item) => (
+                  <SelectItem key={String(item.id)} value={String(item.id)}>
+                    {item.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <div className="space-y-1">
+            <Label className="font-semibold">Capitaine</Label>
+            <Select value={draft.captain} onValueChange={(value) => setDraft({ ...draft, captain: value })}>
+              <SelectTrigger>
+                <User className="mr-2 h-4 w-4 text-primary" />
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tous les capitaines</SelectItem>
+                {captains.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setApplied(draft)}>
+            <Search className="mr-2 h-4 w-4" /> Rechercher
+          </Button>
+        </CardContent>
+      </Card>
+
+      <div className="grid gap-5 xl:grid-cols-[1fr_380px]">
+        {/* ===== Réservations par disponibilité ===== */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-3">
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-900 text-white">
+                <CalendarClock className="h-5 w-5" />
+              </span>
+              <span>
+                Réservations par disponibilité
+                <span className="block text-xs font-normal text-muted-foreground">
+                  Les voyages disponibles sont filtrés automatiquement selon les bateaux et les capacités.
+                </span>
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-4 md:grid-cols-2">
+              {filteredTrips.slice(0, 4).map((item) => {
+                const current = boatById.get(String(item.boatId));
+                const image = readField(current, "image") || readField(current, "photo");
+                const places = placesLeft(item);
+                return (
+                  <div key={String(item.id)} className="flex gap-3 rounded-lg border bg-card p-3 shadow-sm">
+                    {image ? (
+                      <img
+                        src={image}
+                        alt={current?.name ?? "Bateau"}
+                        className="h-24 w-32 rounded-md object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-24 w-32 items-center justify-center rounded-md bg-gradient-to-br from-sky-400 to-blue-700 text-white">
+                        <Ship className="h-8 w-8" />
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2 font-semibold">
+                        <span className="flex items-center gap-1 truncate">
+                          <MapPin className="h-4 w-4 shrink-0 text-primary" /> {item.from} → {item.to}
+                        </span>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                      </div>
+                      <p className="mt-1 flex items-center gap-1 text-xs text-primary">
+                        <CalendarDays className="h-3.5 w-3.5" /> {formatDateTime(item.depart)}
+                      </p>
+                      <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                        <Anchor className="h-3.5 w-3.5" /> Bateau : {current?.name ?? "Non disponible"}
+                      </p>
+                      <div className="mt-2 flex items-center justify-between">
+                        <Badge className="bg-green-100 text-green-700 hover:bg-green-100">
+                          {places > 0 ? "Places disponibles" : "Complet"}
+                        </Badge>
+                        <span className="rounded-md bg-blue-900 px-2 py-1 text-xs font-semibold text-white">
+                          {places}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              {filteredTrips.length === 0 && (
+                <p className="text-sm text-muted-foreground md:col-span-2">
+                  Aucun voyage disponible pour ces critères.
                 </p>
-                <p className="mt-1 text-sm">Bateau : {currentBoat?.name ?? "Non disponible"}</p>
-                <div className="mt-3 flex justify-between">
-                  <span className="text-sm">Places disponibles</span>
-                  <Badge>{currentBoat ? Math.max(0, currentBoat.capacity - 2) : 0}</Badge>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ===== Colonne de droite ===== */}
+        <div className="space-y-4">
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Ship className="h-4 w-4 text-primary" /> Aperçu rapide
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="grid grid-cols-2 gap-3">
+              <StatBox
+                value={filteredTrips.length}
+                label="Trajets disponibles"
+                tone="bg-sky-50 text-sky-600"
+                icon={<Ship className="h-5 w-5" />}
+              />
+              <StatBox
+                value={reservationDays}
+                label="Jours de réservation"
+                tone="bg-green-50 text-green-600"
+                icon={<CalendarDays className="h-5 w-5" />}
+              />
+              <StatBox
+                value={totalPlaces}
+                label="Places disponibles (total)"
+                tone="bg-purple-50 text-purple-600"
+                icon={<Users className="h-5 w-5" />}
+              />
+              <StatBox
+                value={activeBoats}
+                label="Bateau actif"
+                tone="bg-orange-50 text-orange-600"
+                icon={<Anchor className="h-5 w-5" />}
+              />
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader className="flex-row items-center justify-between space-y-0">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <CalendarClock className="h-4 w-4 text-primary" /> Prochains départs
+              </CardTitle>
+              <span className="text-sm text-primary">Voir tous</span>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              {filteredTrips.slice(0, 4).map((item) => (
+                <div key={String(item.id)} className="grid grid-cols-[1.4fr_1fr_auto] items-center gap-2 text-xs">
+                  <span className="flex items-center gap-1 truncate">
+                    <MapPin className="h-3.5 w-3.5 shrink-0 text-primary" /> {item.from} → {item.to}
+                  </span>
+                  <span className="text-muted-foreground">{formatDateTime(item.depart)}</span>
+                  <span className="text-primary">{boatById.get(String(item.boatId))?.name ?? "—"}</span>
                 </div>
+              ))}
+              {filteredTrips.length === 0 && (
+                <p className="text-xs text-muted-foreground">Aucun départ prévu.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="bg-blue-50/60">
+            <CardContent className="flex items-center justify-between gap-3 p-4">
+              <div className="space-y-2">
+                <p className="flex items-center gap-2 text-sm font-semibold">
+                  <Bot className="h-4 w-4 text-primary" /> Assistant IA – Disponibilité
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Posez une question sur la disponibilité des bateaux, les itinéraires ou les places restantes.
+                </p>
+                <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={onOpenAssistant}>
+                  <MessageCircle className="mr-2 h-4 w-4" /> Discuter avec l’assistant
+                </Button>
               </div>
-            );
-          })}
-          {trip.length === 0 && (
-            <p className="text-sm text-muted-foreground md:col-span-2">Aucun voyage disponible pour le moment.</p>
-          )}
+              <Bot className="h-14 w-14 shrink-0 text-primary" />
+            </CardContent>
+          </Card>
         </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
+  );
+}
+
+function StatBox({
+  value,
+  label,
+  tone,
+  icon,
+}: {
+  value: number;
+  label: string;
+  tone: string;
+  icon: ReactNode;
+}) {
+  return (
+    <div className={`flex items-center gap-3 rounded-lg p-3 ${tone}`}>
+      {icon}
+      <div>
+        <p className="text-lg font-bold leading-none">{value}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{label}</p>
+      </div>
+    </div>
   );
 }
 
