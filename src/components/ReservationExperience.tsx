@@ -29,7 +29,7 @@ import {
   verifyAssistantReservation,
 } from "../services/assistantReservationService";
 import { formatCurrency } from "../Tools/Tools";
-import AssistantChat from "./AssistantChat";
+import AssistantReservationsPage from "./AssistantReservationsPage";
 import PassengerReservation from "./PassengerReservation";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -353,12 +353,17 @@ export default function ReservationExperience() {
       )}
 
       {activeTab === "assistant" && (
-        <AssistantChat
+        <AssistantReservationsPage
+          reservations={reservations}
           reservation={selectedReservation ?? undefined}
           knownPlaces={knownPlaces}
           verifyReservation={verifyAssistantReservation}
           createReservation={createAssistantReservation}
+          cancelReservation={(id) => updateReservationStatus(id, "Annulée")}
           onReservationCreated={handleAssistantCreated}
+          onReservationUpdated={(updated) =>
+            setReservations((current) => current.map((item) => (item.id === updated.id ? updated : item)))
+          }
         />
       )}
       {activeTab === "availability" && <AvailabilityPanel trip={trip} boat={boat} />}
