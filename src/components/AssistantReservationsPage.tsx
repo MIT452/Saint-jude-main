@@ -15,23 +15,15 @@ import type { RootState } from "../redux";
 import type { ReservationRecord } from "../services/reservationService";
 import { Card, CardContent } from "./ui/card";
 import AssistantChat, { type AssistantChatProps } from "./AssistantChat";
-import arcanumImage from "../assets/arcanum.png";
-import ericImage from "../assets/eric.png";
 
-// Photo par bateau (nom en minuscules) ; arcanum.png sert aussi d'image par défaut
-const defaultBoatImage = arcanumImage;
-const BOAT_IMAGES: Record<string, string> = {
-  arcanum: arcanumImage,
-  eric: ericImage,
-};
-
-// URL de l'API (ex. http://localhost:5000) pour les chemins relatifs renvoyés par Flask
+// URL de l'API (ex. http://localhost:5000) pour les chemins relatifs éventuels
 const API_ORIGIN = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ?? "")
   .replace(/\/api\/?$/, "")
   .replace(/\/$/, "");
 
+// Image du bateau : data URL (upload depuis l'explorateur), URL complète ou chemin relatif
 const resolveImage = (value?: string) => {
-  if (!value) return defaultBoatImage;
+  if (!value) return "";
   if (/^(https?:|data:|blob:)/.test(value)) return value;
   return `${API_ORIGIN}/${value.replace(/^\/+/, "")}`;
 };
@@ -53,8 +45,8 @@ interface BoatView {
   id: string;
   name: string;
   capacity: string;
-  maintenance: boolean;
-  image?: string;
+  state: string;
+  image: string;
 }
 
 interface TripView {
@@ -129,6 +121,21 @@ const formatDate = (value?: string) => {
 
 const formatAr = (n: number) => `${Math.round(n).toLocaleString("fr-FR")} Ar`;
 
+// Couleurs du badge selon l'état du bateau
+function boatStateStyle(state: string) {
+  const s = norm(state);
+  if (s.includes("maint") || s.includes("panne") || s.includes("hors")) {
+    return { badge: "bg-red-100 text-red-600", dot: "bg-red-500" };
+  }
+  if (s.includes("construction")) {
+    return { badge: "bg-orange-100 text-orange-700", dot: "bg-orange-500" };
+  }
+  if (s.includes("service") || s.includes("dispon")) {
+    return { badge: "bg-emerald-100 text-emerald-700", dot: "bg-emerald-500" };
+  }
+  return { badge: "bg-slate-100 text-slate-600", dot: "bg-slate-400" };
+}
+
 function buildView(reservations: ReservationRecord[]): PageView {
   const pending = reservations.filter(isPending);
   const confirmed = reservations.filter(isConfirmed);
@@ -174,7 +181,8 @@ function buildView(reservations: ReservationRecord[]): PageView {
 }
 
 /* =========================================================
-   Données de démonstration (identiques à la capture)
+   Données de démonstration (réservations uniquement)
+   Les bateaux viennent toujours de la page Gestion de bateau.
 ========================================================= */
 const DEMO_VIEW: PageView = {
   stats: [
@@ -197,11 +205,6 @@ const DEMO_VIEW: PageView = {
     { id: "3", client: "Mamy Andriamihaja", trip: "Mahajanga → Antsiranana", date: "17/04/2025", status: "En attente" },
   ],
 };
-
-const DEMO_BOATS: BoatView[] = [
-  { id: "a", name: "Arcanum", capacity: "14 T", maintenance: true, image: defaultBoatImage },
-  { id: "e", name: "Eric", capacity: "3 T", maintenance: false, image: defaultBoatImage },
-];
 
 /* =========================================================
    Sous-composants
@@ -258,6 +261,27 @@ function CardTitleRow({
   );
 }
 
+// Photo du bateau (ajoutée depuis la page Gestion de bateau), icône si absente ou illisible
+function BoatPhoto({ src, alt }: { src: string; alt: string }) {
+  const [failed, setFailed] = useState(false);
+
+  if (!src || failed) {
+    return (
+      <span className="flex h-16 w-24 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-blue-300 text-blue-800">
+        <Ship className="h-8 w-8" />
+      </span>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={alt}
+      onError={() => setFailed(true)}
+      className="h-16 w-24 shrink-0 rounded-lg object-cover"
+    />
+  );
+}
+
 type Tab = "recent" | "pending" | "confirmed";
 
 /* =========================================================
@@ -276,23 +300,18 @@ export default function AssistantReservationsPage({
   const demo = reservations === undefined;
   const view = useMemo(() => (demo ? DEMO_VIEW : buildView(reservations!)), [demo, reservations]);
 
-  // Bateaux : ceux du store (état « maintenance » lu de façon tolérante)
-  const boats: BoatView[] = useMemo(() => {
-    if (demo) return DEMO_BOATS;
-    return (boat ?? []).map((b) => {
-      const raw = b as unknown as Record<string, unknown>;
-      const state = String(raw.status ?? raw.etat ?? raw.state ?? "");
-      return {
-        id: String(raw.id),
-        name: String(raw.name ?? ""),
-        capacity: `${raw.capacity ?? "-"} T`,
-        maintenance: norm(state).includes("maint"),
-        image:
-          BOAT_IMAGES[String(raw.name ?? "").trim().toLowerCase()] ??
-          resolveImage((raw.image ?? raw.photo ?? raw.image_url) as string | undefined),
-      };
-    });
-  }, [boat, demo]);
+  // Bateaux : ceux du store, avec la photo ajoutée depuis la page Gestion de bateau
+  const boats: BoatView[] = useMemo(
+    () =>
+      (boat ?? []).map((b) => ({
+        id: String(b.id),
+        name: String(b.name ?? ""),
+        capacity: `${(Number(b.capacity) || 0).toLocaleString("fr-FR")} T`,
+        state: String(b.state ?? ""),
+        image: resolveImage(b.image),
+      })),
+    [boat],
+  );
 
   const latestShown = useMemo(() => {
     const list =
@@ -350,47 +369,29 @@ export default function AssistantReservationsPage({
                 <p className="py-4 text-center text-sm text-slate-500">Aucun bateau enregistré</p>
               ) : (
                 <div className="divide-y">
-                  {boats.map((b) => (
-                    <div key={b.id} className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
-                      {b.image ? (
-                        <img
-                          src={b.image}
-                          alt={b.name}
-                          onError={(e) => {
-                            // Image introuvable (chemin invalide) : on met la photo par défaut
-                            const img = e.currentTarget;
-                            if (img.src !== new URL(defaultBoatImage, window.location.href).href) {
-                              img.src = defaultBoatImage;
-                            }
-                          }}
-                          className="h-16 w-24 shrink-0 rounded-lg object-cover"
-                        />
-                      ) : (
-                        <span className="flex h-16 w-24 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-blue-300 text-blue-800">
-                          <Ship className="h-8 w-8" />
-                        </span>
-                      )}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="font-semibold text-blue-950">{b.name}</p>
-                          <span
-                            className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
-                              b.maintenance ? "bg-red-100 text-red-600" : "bg-emerald-100 text-emerald-700"
-                            }`}
-                          >
-                            <span
-                              className={`h-1.5 w-1.5 rounded-full ${b.maintenance ? "bg-red-500" : "bg-emerald-500"}`}
-                            />
-                            {b.maintenance ? "En maintenance" : "Disponible"}
-                          </span>
+                  {boats.map((b, i) => {
+                    const style = boatStateStyle(b.state);
+                    return (
+                      <div key={`${b.id}-${i}`} className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
+                        <BoatPhoto key={b.image} src={b.image} alt={b.name} />
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <p className="font-semibold text-blue-950">{b.name}</p>
+                            {b.state && (
+                              <span
+                                className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${style.badge}`}
+                              >
+                                <span className={`h-1.5 w-1.5 rounded-full ${style.dot}`} />
+                                {b.state}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-400">Capacité : {b.capacity}</p>
+                          <p className="text-xs text-slate-400">État : {b.state || "-"}</p>
                         </div>
-                        <p className="text-xs text-slate-400">Capacité : {b.capacity}</p>
-                        <p className="text-xs text-slate-400">
-                          État : {b.maintenance ? "Maintenance" : "Disponible"}
-                        </p>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </CardContent>
