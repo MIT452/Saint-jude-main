@@ -2,7 +2,7 @@ import { FC, useMemo, useState } from "react";
 import { Button } from "./ui/button";
 import {
   Hammer, Plus, Ship, Search, Filter, Eye, Wrench, CheckCircle2, Gauge,
-  ChevronLeft, ChevronRight, ArrowRight, ListChecks, Cog,
+  ChevronLeft, ChevronRight, ArrowRight, ListChecks, Cog, AlertTriangle,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Input } from "./ui/input";
@@ -24,6 +24,9 @@ const nf = (n: number) => n.toLocaleString("fr-FR");
 // Couleur et badge selon l'état du bateau
 function stateMeta(state: string) {
   const s = norm(state);
+  // "Hors service" et "En panne" avant "service" (sinon "Hors service" passait en vert)
+  if (s.includes("hors") || s.includes("panne"))
+    return { color: "#dc2626", badge: "bg-red-100 text-red-700", Icon: AlertTriangle };
   if (s.includes("service")) return { color: "#16a34a", badge: "bg-green-100 text-green-700", Icon: Cog };
   if (s.includes("maintenance")) return { color: "#f59e0b", badge: "bg-amber-100 text-amber-700", Icon: Wrench };
   if (s.includes("construction")) return { color: "#f97316", badge: "bg-orange-100 text-orange-700", Icon: Hammer };
@@ -34,11 +37,25 @@ function stateMeta(state: string) {
 const StateBadge: FC<{ state: string }> = ({ state }) => {
   const { badge, Icon } = stateMeta(state);
   return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-3 py-1 text-xs font-medium ${badge}`}>
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${badge}`}>
       <Icon className="h-3.5 w-3.5" /> {state}
     </span>
   );
 };
+
+// Miniature du bateau (image ou icône par défaut)
+const BoatThumb: FC<{ boat: Boat; className?: string }> = ({ boat, className = "h-12 w-16" }) =>
+  boat.image ? (
+    <img
+      src={boat.image}
+      alt={String(boat.name)}
+      className={`${className} rounded-md object-cover border bg-slate-100`}
+    />
+  ) : (
+    <span className={`${className} rounded-md bg-slate-100 border flex items-center justify-center`}>
+      <Ship className="h-5 w-5 text-gray-400" />
+    </span>
+  );
 
 const BoatComponant: FC = () => {
   const [showModalForm, setShowModalForm] = useState<boolean>(false);
@@ -56,7 +73,7 @@ const BoatComponant: FC = () => {
   const boatC = boats.filter(({ state }) => state === "En construction");
 
   const capitaineOf = (boat: Boat) => {
-    const c = capitaines.find(({ id }) => boat.crew.includes(id));
+    const c = capitaines.find(({ id }) => boat.crew?.includes(id));
     return c ? `${c.name} ${c.lastName}` : "-";
   };
 
@@ -230,6 +247,7 @@ const BoatComponant: FC = () => {
                   <TableHeader>
                     <TableRow className="bg-blue-50/60">
                       <TableHead className="w-10">#</TableHead>
+                      <TableHead>Image</TableHead>
                       <TableHead>Matricule</TableHead>
                       <TableHead>Nom</TableHead>
                       <TableHead>Capacité (T)</TableHead>
@@ -240,8 +258,15 @@ const BoatComponant: FC = () => {
                   </TableHeader>
                   <TableBody>
                     {visible.map((boat, i) => (
-                      <TableRow key={boat.id} className="hover:bg-blue-50/40 cursor-pointer" onClick={() => openBoat(boat)}>
+                      <TableRow
+                        key={`${boat.id}-${startIdx + i}`}
+                        className="hover:bg-blue-50/40 cursor-pointer"
+                        onClick={() => openBoat(boat)}
+                      >
                         <TableCell className="text-gray-500">{startIdx + i + 1}</TableCell>
+                        <TableCell>
+                          <BoatThumb boat={boat} />
+                        </TableCell>
                         <TableCell className="font-medium text-[#001F3F]">{boat.id}</TableCell>
                         <TableCell className="font-medium">{boat.name}</TableCell>
                         <TableCell>{nf(Number(boat.capacity) || 0)}</TableCell>
@@ -306,8 +331,9 @@ const BoatComponant: FC = () => {
               <div className="p-5">
                 <h3 className="font-semibold mb-4">Détails des bateaux</h3>
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-                  {boats.slice(0, 4).map((boat) => (
-                    <div key={boat.id} className="rounded-xl border bg-white p-4 shadow-sm">
+                  {boats.slice(0, 4).map((boat, i) => (
+                    <div key={`${boat.id}-${i}`} className="rounded-xl border bg-white p-4 shadow-sm">
+                      <BoatThumb boat={boat} className="mb-3 h-32 w-full" />
                       <p className="flex items-center gap-2 font-semibold">
                         <Ship className="h-5 w-5 text-blue-700" /> Bateau {boat.id} ({boat.name})
                       </p>
@@ -372,11 +398,11 @@ const BoatComponant: FC = () => {
               </CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
-              {boats.slice(0, 6).map((boat) => {
+              {boats.slice(0, 6).map((boat, i) => {
                 const cap = Number(boat.capacity) || 0;
                 const share = totalCapacity > 0 ? (cap / totalCapacity) * 100 : 0;
                 return (
-                  <div key={boat.id}>
+                  <div key={`${boat.id}-${i}`}>
                     <div className="flex justify-between text-xs">
                       <span className="font-medium">Bateau {boat.id} ({boat.name})</span>
                       <span className="text-gray-500">
@@ -402,7 +428,9 @@ const BoatComponant: FC = () => {
       </div>
 
       {showModalForm && <BoatForm onClose={() => setShowModalForm(false)} />}
-      {showModal && currentBoat && <BoatModal currentBoat={currentBoat} onClose={() => setShowModal(false)} />}
+      {showModal && currentBoat && (
+        <BoatModal currentBoat={currentBoat} onClose={() => setShowModal(false)} />
+      )}
     </div>
   );
 };

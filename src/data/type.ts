@@ -112,6 +112,7 @@ export interface Boat {
   state: EtatBoat;
   crew: string[]; // équipage
   // pour le survellance
+  image?: string; // photo du bateau (data URL JPEG compressée)
   userId: string;
 }
 
