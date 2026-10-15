@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSelector } from "react-redux";
 import {
   Anchor,
@@ -8,6 +8,7 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronRight,
+  Eye,
   MapPin,
   MessageCircle,
   Package,
@@ -94,8 +95,13 @@ const getReservationDate = (reservation: ReservationRecord): string => {
 const getErrorMessage = (error: unknown) =>
   error instanceof Error ? error.message : "Erreur inconnue";
 
-// Date au format yyyy-mm-dd pour les champs <input type="date">
-const toInputDate = (date: Date) => date.toISOString().slice(0, 10);
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Date locale au format yyyy-mm-dd pour les champs <input type="date">
+const toInputDate = (date: Date) =>
+  `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(
+    date.getDate()
+  ).padStart(2, "0")}`;
 
 const formatDateTime = (value: string) => {
   const parsed = new Date(value);
@@ -104,6 +110,8 @@ const formatDateTime = (value: string) => {
   const time = parsed.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
   return `${date} ${time}`;
 };
+
+const capitalize = (value: string) => (value ? value.charAt(0).toUpperCase() + value.slice(1) : value);
 
 // Champs optionnels selon vos types (image, capitaine...) : lecture sécurisée
 const readField = (source: unknown, key: string): string => {
@@ -404,19 +412,27 @@ export default function ReservationExperience() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Package className="h-5 w-5 text-primary" /> Tableau des réservations
+          <CardTitle className="flex items-center gap-3">
+            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-900 text-white">
+              <Package className="h-5 w-5" />
+            </span>
+            Tableau des réservations
           </CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <div className="flex items-center gap-3 border-b p-4">
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Rechercher un client ou un voyage"
-              className="max-w-md"
-            />
-            <span className="text-sm text-muted-foreground">{visibleReservations.length} réservation(s)</span>
+            <div className="relative w-full max-w-xl">
+              <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-primary" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder="Rechercher un client ou un voyage..."
+                className="pl-9"
+              />
+            </div>
+            <span className="whitespace-nowrap text-sm text-muted-foreground">
+              {visibleReservations.length} réservation(s)
+            </span>
           </div>
           <div className="overflow-x-auto">
             <Table>
@@ -443,8 +459,15 @@ export default function ReservationExperience() {
                     }`}
                   >
                     <TableCell>
-                      <p className="font-medium">{reservation.clientName}</p>
-                      <p className="text-xs text-muted-foreground">{reservation.clientPhone}</p>
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-600">
+                          <User className="h-5 w-5" />
+                        </span>
+                        <div>
+                          <p className="font-medium">{reservation.clientName}</p>
+                          <p className="text-xs text-muted-foreground">{reservation.clientPhone}</p>
+                        </div>
+                      </div>
                     </TableCell>
                     <TableCell>
                       {reservation.departure} → {reservation.destination}
@@ -470,7 +493,7 @@ export default function ReservationExperience() {
                           setSelectedReservation(reservation);
                         }}
                       >
-                        Voir
+                        <Eye className="mr-1 h-4 w-4" /> Voir
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -558,6 +581,10 @@ function StatusMessage({
 ========================= */
 
 const ALL = "all";
+// Places déjà prises par défaut sur chaque voyage (comme l'ancien affichage : capacité - 2)
+const PLACES_RESERVEES_PAR_DEFAUT = 2;
+// Durée de la période par défaut, en jours (03/10 → 17/10 sur la maquette)
+const PERIODE_PAR_DEFAUT_JOURS = 14;
 
 interface AvailabilityFilters {
   from: string;
@@ -579,19 +606,37 @@ function AvailabilityPanel({
   reservations?: ReservationRecord[];
   onOpenAssistant?: () => void;
 }) {
-  const today = new Date();
-  const defaultFilters: AvailabilityFilters = {
-    from: ALL,
-    to: ALL,
-    start: toInputDate(today),
-    end: toInputDate(new Date(today.getTime() + 14 * 24 * 60 * 60 * 1000)),
-    boatId: ALL,
-    captain: ALL,
-  };
+  const [draft, setDraft] = useState<AvailabilityFilters>(() => {
+    const now = new Date();
+    return {
+      from: ALL,
+      to: ALL,
+      start: toInputDate(now),
+      end: toInputDate(new Date(now.getTime() + PERIODE_PAR_DEFAUT_JOURS * DAY_MS)),
+      boatId: ALL,
+      captain: ALL,
+    };
+  });
+  const [applied, setApplied] = useState<AvailabilityFilters>(draft);
 
-  // draft = valeurs en cours de saisie ; applied = valeurs appliquées par « Rechercher »
-  const [draft, setDraft] = useState<AvailabilityFilters>(defaultFilters);
-  const [applied, setApplied] = useState<AvailabilityFilters>(defaultFilters);
+  // La période par défaut démarre au premier voyage (et non à aujourd'hui),
+  // pour afficher les voyages dès l'ouverture comme sur la maquette.
+  const periodInitialised = useRef(false);
+  useEffect(() => {
+    if (periodInitialised.current || trip.length === 0) return;
+    const times = trip
+      .map((item) => new Date(item.depart).getTime())
+      .filter((value) => !Number.isNaN(value));
+    if (times.length === 0) return;
+    periodInitialised.current = true;
+    const first = new Date(Math.min(...times));
+    const period = {
+      start: toInputDate(first),
+      end: toInputDate(new Date(first.getTime() + PERIODE_PAR_DEFAUT_JOURS * DAY_MS)),
+    };
+    setDraft((current) => ({ ...current, ...period }));
+    setApplied((current) => ({ ...current, ...period }));
+  }, [trip]);
 
   const ports = useMemo(
     () => Array.from(new Set(trip.flatMap((item) => [item.from, item.to]).filter(Boolean))),
@@ -612,7 +657,7 @@ function AvailabilityPanel({
 
   const boatById = useMemo(() => new Map(boat.map((item) => [String(item.id), item])), [boat]);
 
-  // Places restantes = capacité du bateau - passagers des réservations non annulées sur le même trajet
+  // Places restantes = capacité - places par défaut - passagers des réservations non annulées sur le trajet
   const placesLeft = (item: Trip) => {
     const current = boatById.get(String(item.boatId));
     if (!current) return 0;
@@ -621,7 +666,7 @@ function AvailabilityPanel({
         (r) => r.departure === item.from && r.destination === item.to && !estAnnulee(r.status)
       )
       .reduce((sum, r) => sum + (Number(r.passengers) || 0), 0);
-    return Math.max(0, current.capacity - taken);
+    return Math.max(0, current.capacity - PLACES_RESERVEES_PAR_DEFAUT - taken);
   };
 
   const filteredTrips = useMemo(() => {
@@ -654,7 +699,8 @@ function AvailabilityPanel({
   const reservationDays = Math.max(
     0,
     Math.round(
-      (new Date(applied.end).getTime() - new Date(applied.start).getTime()) / (24 * 60 * 60 * 1000)
+      (new Date(`${applied.end}T00:00:00`).getTime() - new Date(`${applied.start}T00:00:00`).getTime()) /
+        DAY_MS
     )
   );
 
@@ -666,9 +712,11 @@ function AvailabilityPanel({
           <div className="space-y-1">
             <Label className="font-semibold">Départ</Label>
             <Select value={draft.from} onValueChange={(value) => setDraft({ ...draft, from: value })}>
-              <SelectTrigger>
-                <MapPin className="mr-2 h-4 w-4 text-primary" />
-                <SelectValue />
+              <SelectTrigger className="bg-white">
+                <span className="flex items-center gap-2">
+                  <MapPin className="h-4 w-4 text-primary" />
+                  <SelectValue />
+                </span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Tous les ports</SelectItem>
@@ -684,9 +732,11 @@ function AvailabilityPanel({
           <div className="space-y-1">
             <Label className="font-semibold">Arrivée</Label>
             <Select value={draft.to} onValueChange={(value) => setDraft({ ...draft, to: value })}>
-              <SelectTrigger>
-                <MapPin className="mr-2 h-4 w-4 text-primary" />
-                <SelectValue />
+              <SelectTrigger className="bg-white">
+                <span className="flex items-center gap-2">
+                  <MapPin className="h-4 w-4 text-primary" />
+                  <SelectValue />
+                </span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Tous les ports</SelectItem>
@@ -701,20 +751,22 @@ function AvailabilityPanel({
 
           <div className="space-y-1">
             <Label className="font-semibold">Période</Label>
-            <div className="flex items-center gap-2">
+            <div className="flex h-10 items-center gap-2 rounded-md border bg-white px-3">
               <CalendarDays className="h-4 w-4 shrink-0 text-primary" />
-              <Input
+              <input
                 type="date"
                 value={draft.start}
                 max={draft.end}
                 onChange={(event) => setDraft({ ...draft, start: event.target.value })}
+                className="w-full min-w-0 bg-transparent text-sm outline-none"
               />
               <span className="text-muted-foreground">–</span>
-              <Input
+              <input
                 type="date"
                 value={draft.end}
                 min={draft.start}
                 onChange={(event) => setDraft({ ...draft, end: event.target.value })}
+                className="w-full min-w-0 bg-transparent text-sm outline-none"
               />
             </div>
           </div>
@@ -722,9 +774,11 @@ function AvailabilityPanel({
           <div className="space-y-1">
             <Label className="font-semibold">Bateau</Label>
             <Select value={draft.boatId} onValueChange={(value) => setDraft({ ...draft, boatId: value })}>
-              <SelectTrigger>
-                <Ship className="mr-2 h-4 w-4 text-primary" />
-                <SelectValue />
+              <SelectTrigger className="bg-white">
+                <span className="flex items-center gap-2">
+                  <Ship className="h-4 w-4 text-primary" />
+                  <SelectValue />
+                </span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Tous les bateaux</SelectItem>
@@ -740,9 +794,11 @@ function AvailabilityPanel({
           <div className="space-y-1">
             <Label className="font-semibold">Capitaine</Label>
             <Select value={draft.captain} onValueChange={(value) => setDraft({ ...draft, captain: value })}>
-              <SelectTrigger>
-                <User className="mr-2 h-4 w-4 text-primary" />
-                <SelectValue />
+              <SelectTrigger className="bg-white">
+                <span className="flex items-center gap-2">
+                  <User className="h-4 w-4 text-primary" />
+                  <SelectValue />
+                </span>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value={ALL}>Tous les capitaines</SelectItem>
@@ -755,7 +811,7 @@ function AvailabilityPanel({
             </Select>
           </div>
 
-          <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => setApplied(draft)}>
+          <Button className="h-10 bg-blue-600 px-6 hover:bg-blue-700" onClick={() => setApplied(draft)}>
             <Search className="mr-2 h-4 w-4" /> Rechercher
           </Button>
         </CardContent>
@@ -789,12 +845,10 @@ function AvailabilityPanel({
                       <img
                         src={image}
                         alt={current?.name ?? "Bateau"}
-                        className="h-24 w-32 rounded-md object-cover"
+                        className="h-24 w-32 shrink-0 rounded-md object-cover"
                       />
                     ) : (
-                      <div className="flex h-24 w-32 items-center justify-center rounded-md bg-gradient-to-br from-sky-400 to-blue-700 text-white">
-                        <Ship className="h-8 w-8" />
-                      </div>
+                      <ShipIllustration />
                     )}
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center justify-between gap-2 font-semibold">
@@ -835,32 +889,43 @@ function AvailabilityPanel({
           <Card>
             <CardHeader>
               <CardTitle className="flex items-center gap-2 text-base">
-                <Ship className="h-4 w-4 text-primary" /> Aperçu rapide
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-blue-900 text-white">
+                  <Ship className="h-4 w-4" />
+                </span>
+                Aperçu rapide
               </CardTitle>
             </CardHeader>
             <CardContent className="grid grid-cols-2 gap-3">
               <StatBox
                 value={filteredTrips.length}
                 label="Trajets disponibles"
-                tone="bg-sky-50 text-sky-600"
+                box="bg-sky-50"
+                circle="bg-sky-400"
+                valueColor="text-sky-600"
                 icon={<Ship className="h-5 w-5" />}
               />
               <StatBox
                 value={reservationDays}
                 label="Jours de réservation"
-                tone="bg-green-50 text-green-600"
+                box="bg-green-50"
+                circle="bg-green-500"
+                valueColor="text-green-600"
                 icon={<CalendarDays className="h-5 w-5" />}
               />
               <StatBox
                 value={totalPlaces}
                 label="Places disponibles (total)"
-                tone="bg-purple-50 text-purple-600"
+                box="bg-purple-50"
+                circle="bg-purple-500"
+                valueColor="text-purple-600"
                 icon={<Users className="h-5 w-5" />}
               />
               <StatBox
                 value={activeBoats}
                 label="Bateau actif"
-                tone="bg-orange-50 text-orange-600"
+                box="bg-orange-50"
+                circle="bg-orange-400"
+                valueColor="text-orange-600"
                 icon={<Anchor className="h-5 w-5" />}
               />
             </CardContent>
@@ -869,18 +934,18 @@ function AvailabilityPanel({
           <Card>
             <CardHeader className="flex-row items-center justify-between space-y-0">
               <CardTitle className="flex items-center gap-2 text-base">
-                <CalendarClock className="h-4 w-4 text-primary" /> Prochains départs
+                <CalendarClock className="h-5 w-5 text-blue-900" /> Prochains départs
               </CardTitle>
               <span className="text-sm text-primary">Voir tous</span>
             </CardHeader>
             <CardContent className="space-y-2">
               {filteredTrips.slice(0, 4).map((item) => (
-                <div key={String(item.id)} className="grid grid-cols-[1.4fr_1fr_auto] items-center gap-2 text-xs">
+                <div key={String(item.id)} className="grid grid-cols-[1.5fr_1fr_auto] items-center gap-2 text-xs">
                   <span className="flex items-center gap-1 truncate">
                     <MapPin className="h-3.5 w-3.5 shrink-0 text-primary" /> {item.from} → {item.to}
                   </span>
                   <span className="text-muted-foreground">{formatDateTime(item.depart)}</span>
-                  <span className="text-primary">{boatById.get(String(item.boatId))?.name ?? "—"}</span>
+                  <span className="text-primary">{capitalize(boatById.get(String(item.boatId))?.name ?? "—")}</span>
                 </div>
               ))}
               {filteredTrips.length === 0 && (
@@ -890,19 +955,20 @@ function AvailabilityPanel({
           </Card>
 
           <Card className="bg-blue-50/60">
-            <CardContent className="flex items-center justify-between gap-3 p-4">
+            <CardContent className="relative flex items-center justify-between gap-3 p-4">
+              <Badge className="absolute right-4 top-3 bg-green-100 text-green-700 hover:bg-green-100">Groq</Badge>
               <div className="space-y-2">
                 <p className="flex items-center gap-2 text-sm font-semibold">
-                  <Bot className="h-4 w-4 text-primary" /> Assistant IA – Disponibilité
+                  <Bot className="h-5 w-5 text-blue-900" /> Assistant IA – Disponibilité
                 </p>
-                <p className="text-xs text-muted-foreground">
+                <p className="max-w-[230px] text-xs text-muted-foreground">
                   Posez une question sur la disponibilité des bateaux, les itinéraires ou les places restantes.
                 </p>
                 <Button size="sm" className="bg-blue-600 hover:bg-blue-700" onClick={onOpenAssistant}>
                   <MessageCircle className="mr-2 h-4 w-4" /> Discuter avec l’assistant
                 </Button>
               </div>
-              <Bot className="h-14 w-14 shrink-0 text-primary" />
+              <RobotIllustration />
             </CardContent>
           </Card>
         </div>
@@ -914,22 +980,77 @@ function AvailabilityPanel({
 function StatBox({
   value,
   label,
-  tone,
+  box,
+  circle,
+  valueColor,
   icon,
 }: {
   value: number;
   label: string;
-  tone: string;
+  box: string;
+  circle: string;
+  valueColor: string;
   icon: ReactNode;
 }) {
   return (
-    <div className={`flex items-center gap-3 rounded-lg p-3 ${tone}`}>
-      {icon}
+    <div className={`flex items-center gap-3 rounded-lg p-3 ${box}`}>
+      <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white ${circle}`}>
+        {icon}
+      </span>
       <div>
-        <p className="text-lg font-bold leading-none">{value}</p>
+        <p className={`text-xl font-bold leading-none ${valueColor}`}>{value}</p>
         <p className="mt-1 text-xs text-muted-foreground">{label}</p>
       </div>
     </div>
+  );
+}
+
+// Illustration de bateau utilisée quand le bateau n'a pas de photo (champ image/photo)
+function ShipIllustration() {
+  return (
+    <svg viewBox="0 0 128 96" className="h-24 w-32 shrink-0 rounded-md" aria-hidden="true">
+      <defs>
+        <linearGradient id="ship-sky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stopColor="#2f9bf0" />
+          <stop offset="1" stopColor="#c4e6fb" />
+        </linearGradient>
+      </defs>
+      <rect width="128" height="96" fill="url(#ship-sky)" />
+      <ellipse cx="28" cy="20" rx="16" ry="6" fill="#fff" opacity="0.85" />
+      <ellipse cx="98" cy="13" rx="14" ry="5" fill="#fff" opacity="0.75" />
+      <rect y="64" width="128" height="32" fill="#1b6fd0" />
+      <path d="M0 72 Q16 66 32 72 T64 72 T96 72 T128 72 V96 H0Z" fill="#2f86e8" />
+      <path d="M14 56 H114 L104 72 H26Z" fill="#1e3a8a" />
+      <rect x="16" y="52" width="96" height="5" fill="#ef4444" />
+      <rect x="28" y="40" width="68" height="12" fill="#ffffff" />
+      <rect x="38" y="30" width="48" height="10" fill="#f1f5f9" />
+      <rect x="52" y="22" width="22" height="8" fill="#ffffff" />
+      <rect x="60" y="13" width="6" height="9" fill="#1e3a8a" />
+      <g fill="#1e3a8a" opacity="0.8">
+        <rect x="34" y="44" width="6" height="4" />
+        <rect x="46" y="44" width="6" height="4" />
+        <rect x="58" y="44" width="6" height="4" />
+        <rect x="70" y="44" width="6" height="4" />
+        <rect x="82" y="44" width="6" height="4" />
+      </g>
+    </svg>
+  );
+}
+
+function RobotIllustration() {
+  return (
+    <svg viewBox="0 0 80 96" className="h-24 w-20 shrink-0" aria-hidden="true">
+      <line x1="40" y1="6" x2="40" y2="16" stroke="#1d4ed8" strokeWidth="3" />
+      <circle cx="40" cy="5" r="4" fill="#3b82f6" />
+      <rect x="14" y="16" width="52" height="36" rx="14" fill="#e0f2fe" stroke="#1d4ed8" strokeWidth="3" />
+      <rect x="22" y="26" width="36" height="16" rx="8" fill="#1e3a8a" />
+      <circle cx="32" cy="34" r="3.5" fill="#38bdf8" />
+      <circle cx="48" cy="34" r="3.5" fill="#38bdf8" />
+      <rect x="20" y="56" width="40" height="28" rx="10" fill="#e0f2fe" stroke="#1d4ed8" strokeWidth="3" />
+      <circle cx="40" cy="70" r="5" fill="#3b82f6" />
+      <rect x="6" y="60" width="10" height="18" rx="5" fill="#bfdbfe" stroke="#1d4ed8" strokeWidth="2" />
+      <rect x="64" y="60" width="10" height="18" rx="5" fill="#bfdbfe" stroke="#1d4ed8" strokeWidth="2" />
+    </svg>
   );
 }
 
