@@ -259,6 +259,16 @@ export default function AssistantReservationsPage({
   const view = useMemo(() => (demo ? DEMO_VIEW : buildView(reservations!)), [demo, reservations]);
 
   // Bateaux : ceux du store (état « maintenance » lu de façon tolérante)
+  // URL de l'API (ex. http://localhost:5000) pour les chemins relatifs renvoyés par Flask
+  const API_ORIGIN = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ?? "")
+    .replace(/\/api\/?$/, "")
+    .replace(/\/$/, "");
+  const resolveImage = (value?: string) => {
+    if (!value) return defaultBoatImage;
+    if (/^(https?:|data:|blob:)/.test(value)) return value;
+    return `${API_ORIGIN}/${value.replace(/^\/+/, "")}`;
+  };
+
   const boats: BoatView[] = useMemo(() => {
     if (demo) return DEMO_BOATS;
     return (boat ?? []).map((b) => {
@@ -269,7 +279,7 @@ export default function AssistantReservationsPage({
         name: String(raw.name ?? ""),
         capacity: `${raw.capacity ?? "-"} T`,
         maintenance: norm(state).includes("maint"),
-        image: ((raw.image ?? raw.photo) as string | undefined) || defaultBoatImage,
+        image: resolveImage((raw.image ?? raw.photo ?? raw.image_url) as string | undefined),
       };
     });
   }, [boat, demo]);
@@ -333,7 +343,18 @@ export default function AssistantReservationsPage({
                   {boats.map((b) => (
                     <div key={b.id} className="flex items-center gap-4 py-3 first:pt-0 last:pb-0">
                       {b.image ? (
-                        <img src={b.image} alt={b.name} className="h-16 w-24 shrink-0 rounded-lg object-cover" />
+                        <img
+                          src={b.image}
+                          alt={b.name}
+                          onError={(e) => {
+                            // Image introuvable (chemin invalide) : on met la photo par défaut
+                            const img = e.currentTarget;
+                            if (img.src !== new URL(defaultBoatImage, window.location.href).href) {
+                              img.src = defaultBoatImage;
+                            }
+                          }}
+                          className="h-16 w-24 shrink-0 rounded-lg object-cover"
+                        />
                       ) : (
                         <span className="flex h-16 w-24 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-blue-100 to-blue-300 text-blue-800">
                           <Ship className="h-8 w-8" />
