@@ -165,16 +165,16 @@ const GestionCaissePage: FC<PropsGestionCaissePage> = ({ onSetTofeuldManage }) =
           </Card>
 
           {/* Boutons */}
-          <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 self-stretch">
             <Button
-              className="h-full min-h-[56px] justify-between bg-blue-600 hover:bg-blue-700 text-white"
+              className="flex-1 h-auto min-h-[64px] justify-between bg-blue-600 hover:bg-blue-700 text-white whitespace-normal text-left"
               onClick={() => onSetTofeuldManage('fueldManage')}
             >
-              <span className="flex items-center gap-2"><Fuel className="h-5 w-5" /> Voir la consommation du carburant</span>
-              <ChevronRight className="h-4 w-4" />
+              <span className="flex items-center gap-2"><Fuel className="h-5 w-5 shrink-0" /> Voir la consommation du carburant</span>
+              <ChevronRight className="h-4 w-4 shrink-0" />
             </Button>
             <Button
-              className="h-full min-h-[56px] justify-between bg-green-600 hover:bg-green-700 text-white"
+              className="flex-1 h-auto min-h-[64px] justify-between bg-green-600 hover:bg-green-700 text-white whitespace-normal text-left"
               onClick={() => setShowCashForm(true)}
             >
               <span className="flex items-center gap-2"><Plus className="h-5 w-5" /> Nouveau Mouvement</span>
