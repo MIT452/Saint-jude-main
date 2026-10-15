@@ -5,8 +5,9 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '.
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import {
   Calculator, Search, Filter, TrendingUp, TrendingDown, Plus, Fuel,
-  Wallet, ArrowUp, ArrowDown, ChevronRight, ListChecks, Lightbulb, Bot, User,
+  Wallet, ArrowUp, ArrowDown, ChevronRight, ListChecks, User,
 } from 'lucide-react';
+import AiFinanceChat from './AiFinanceChat';
 import { useSelector } from 'react-redux';
 import { RootState } from '../redux';
 import { findUser, formatCurrency, formatDate } from '../Tools/Tools';
@@ -371,28 +372,8 @@ const GestionCaissePage: FC<PropsGestionCaissePage> = ({ onSetTofeuldManage }) =
               </CardContent>
             </Card>
 
-            {/* Conseils IA */}
-            <Card className="border border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-sm">
-              <CardContent className="pt-6">
-                <div className="flex items-start gap-3">
-                  <div className="flex-1">
-                    <p className="font-semibold text-sm flex items-center gap-2">
-                      <Lightbulb className="h-4 w-4 text-blue-600" /> Conseils de l'assistant IA
-                    </p>
-                    <p className="mt-2 text-xs text-gray-700">
-                      {solde >= 0 ? 'Votre solde est positif !' : 'Attention : votre solde est négatif.'}
-                    </p>
-                    <p className="text-xs text-blue-700">
-                      Pensez à surveiller vos sorties : elles représentent {pctDebit}% des mouvements sur la période.
-                    </p>
-                  </div>
-                  <Bot className="h-14 w-14 text-blue-500" />
-                </div>
-                <Button className="mt-4 bg-blue-700 hover:bg-blue-800 text-white text-xs h-9">
-                  <Lightbulb className="h-4 w-4 mr-2" /> Voir les recommandations
-                </Button>
-              </CardContent>
-            </Card>
+            {/* Assistant IA (Groq via le backend Render) */}
+            <AiFinanceChat scope="cash" />
           </div>
         </div>
       </div>

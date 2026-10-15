@@ -1,9 +1,10 @@
 import { FC, useMemo, useState } from "react";
 import { Button } from "./ui/button";
 import {
-  Filter, Fuel, Plus, Search, RotateCcw, Ship, User, Route, Lightbulb, Bot,
+  Filter, Fuel, Plus, Search, RotateCcw, Ship, User, Route,
   Droplets, Banknote, ListChecks, Gauge,
 } from "lucide-react";
+import AiFinanceChat from "./AiFinanceChat";
 import CashFuelConsumption from "./FuelConsumptionForm";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
@@ -149,12 +150,6 @@ const FuelConsumption: FC = () => {
       return `${x},${y}`;
     })
     .join(" ");
-
-  // Conseil IA (calculé localement à partir des données)
-  const topBoat = topBoats[0];
-  const advice = topBoat
-    ? `Le bateau « ${topBoat[0]} » représente la plus forte consommation (${nf(topBoat[1])} L). Vérifiez le nombre de voyages et l'état du moteur avant de conclure à une anomalie.`
-    : "Aucune donnée de consommation sur la période sélectionnée.";
 
   return (
     <div className="flex flex-col bg-slate-50/60 p-4 min-h-screen text-primary">
@@ -465,23 +460,8 @@ const FuelConsumption: FC = () => {
             </CardContent>
           </Card>
 
-          {/* Conseils IA */}
-          <Card className="border border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-sm">
-            <CardContent className="pt-6">
-              <div className="flex items-start gap-3">
-                <div className="flex-1">
-                  <p className="font-semibold text-sm flex items-center gap-2">
-                    <Lightbulb className="h-4 w-4 text-blue-600" /> Conseils de l'assistant IA
-                  </p>
-                  <p className="mt-2 text-xs text-gray-700">{advice}</p>
-                </div>
-                <Bot className="h-14 w-14 text-blue-500 shrink-0" />
-              </div>
-              <Button className="mt-4 bg-blue-700 hover:bg-blue-800 text-white text-xs h-9">
-                <Lightbulb className="h-4 w-4 mr-2" /> Voir toutes les recommandations
-              </Button>
-            </CardContent>
-          </Card>
+          {/* Assistant IA (Groq via le backend Render) */}
+          <AiFinanceChat scope="fuel" />
         </div>
       </div>
 
