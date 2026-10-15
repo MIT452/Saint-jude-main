@@ -15,7 +15,6 @@ import type { RootState } from "../redux";
 import type { ReservationRecord } from "../services/reservationService";
 import { Card, CardContent } from "./ui/card";
 import AssistantChat, { type AssistantChatProps } from "./AssistantChat";
-// Photo par défaut des bateaux : enregistre ton image dans src/assets/boat-default.jpg
 import arcanumImage from "../assets/arcanum.png";
 import ericImage from "../assets/eric.png";
 
@@ -24,6 +23,17 @@ const defaultBoatImage = arcanumImage;
 const BOAT_IMAGES: Record<string, string> = {
   arcanum: arcanumImage,
   eric: ericImage,
+};
+
+// URL de l'API (ex. http://localhost:5000) pour les chemins relatifs renvoyés par Flask
+const API_ORIGIN = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ?? "")
+  .replace(/\/api\/?$/, "")
+  .replace(/\/$/, "");
+
+const resolveImage = (value?: string) => {
+  if (!value) return defaultBoatImage;
+  if (/^(https?:|data:|blob:)/.test(value)) return value;
+  return `${API_ORIGIN}/${value.replace(/^\/+/, "")}`;
 };
 
 /* =========================================================
@@ -267,16 +277,6 @@ export default function AssistantReservationsPage({
   const view = useMemo(() => (demo ? DEMO_VIEW : buildView(reservations!)), [demo, reservations]);
 
   // Bateaux : ceux du store (état « maintenance » lu de façon tolérante)
-  // URL de l'API (ex. http://localhost:5000) pour les chemins relatifs renvoyés par Flask
-  const API_ORIGIN = ((import.meta as unknown as { env?: Record<string, string> }).env?.VITE_API_URL ?? "")
-    .replace(/\/api\/?$/, "")
-    .replace(/\/$/, "");
-  const resolveImage = (value?: string) => {
-    if (!value) return defaultBoatImage;
-    if (/^(https?:|data:|blob:)/.test(value)) return value;
-    return `${API_ORIGIN}/${value.replace(/^\/+/, "")}`;
-  };
-
   const boats: BoatView[] = useMemo(() => {
     if (demo) return DEMO_BOATS;
     return (boat ?? []).map((b) => {
