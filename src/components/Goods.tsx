@@ -21,7 +21,7 @@ import {
   XCircle,
   type LucideIcon,
 } from 'lucide-react';
-import { useSelector } from 'react-redux';
+import { useDispatch, useSelector } from 'react-redux';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -34,7 +34,8 @@ import { askAssistant } from '../data/intelligenceService';
 import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
-import { Goods, Reservation } from '../data/type';
+import { CashMovement, Goods, Reservation } from '../data/type';
+import { setCashMouvement, setReservation } from '../redux/feature/stJude';
 import { reservationVoid } from '../data/dataVoid';
 
 /* =========================
@@ -312,23 +313,6 @@ const exporterCsv = (lignes: string[][]) => {
 const PAGE_SIZE = 8;
 
 /* =========================
-   Enregistrement d'un paiement supplémentaire
-   >>> À BRANCHER sur votre API / action Redux existante <<<
-   Il faut mettre à jour la réservation avec :
-     amountPaid  = ancien montant payé + montant
-     amountToPay = total - nouveau montant payé
-   et NE PAS modifier userId (le caissier d'origine).
-========================= */
-const enregistrerPaiement = async (reservation: Reservation, montant: number): Promise<void> => {
-  const nouveauPaye = (Number(reservation.amountPaid) || 0) + montant;
-  const nouveauReste = Math.max((Number(reservation.totalPrice) || 0) - nouveauPaye, 0);
-
-  // TODO : remplacer cette ligne par l'appel réel (fetch / dispatch) avec
-  // { id: reservation.id, amountPaid: nouveauPaye, amountToPay: nouveauReste }
-  throw new Error(`Enregistrement non branché (nouveau payé : ${nouveauPaye}, reste : ${nouveauReste})`);
-};
-
-/* =========================
    Fenêtre « Ajouter paiement »
 ========================= */
 type PaiementModalProps = {
@@ -341,9 +325,52 @@ const PaiementModal = ({ reservation, onClose }: PaiementModalProps) => {
   const [erreur, setErreur] = useState('');
   const [enCours, setEnCours] = useState(false);
 
+  const dispatch = useDispatch();
+  const cashMouvement = useSelector((state: RootState) => state.stJude.cashMouvement);
+  const currentUser = useSelector((state: RootState) => state.users.currentUser);
+
   const total = Number(reservation.totalPrice) || 0;
   const paye = Number(reservation.amountPaid) || 0;
   const reste = Math.max(total - paye, 0);
+
+  // Enregistre le paiement dans le store (même logique que « Confirmer la modification » de la fenêtre de détail) :
+  // - la réservation garde son userId (caissier d'origine)
+  // - le mouvement de caisse est mis à jour, ou créé s'il n'existe pas encore
+  const enregistrerPaiement = (montantAjoute: number) => {
+    const nouveauPaye = paye + montantAjoute;
+    const nouveauReste = Math.max(total - nouveauPaye, 0);
+    const reservationMaj: Reservation = {
+      ...reservation,
+      amountPaid: nouveauPaye,
+      amountToPay: nouveauReste,
+      paymentStatus: nouveauPaye >= total,
+    };
+    const existant = cashMouvement.find(({ id }) => id === reservation.idCashMovement);
+
+    if (existant) {
+      const mouvement: CashMovement = {
+        ...existant,
+        credit: nouveauPaye,
+        userId: currentUser ? currentUser.id : '',
+        date: new Date().toISOString(),
+      };
+      dispatch(setCashMouvement(mouvement));
+      dispatch(setReservation(reservationMaj));
+    } else {
+      const mouvement: CashMovement = {
+        id: uuid(),
+        credit: nouveauPaye,
+        userId: currentUser ? currentUser.id : '',
+        date: new Date().toISOString(),
+        tripId: reservation.tripId,
+        designation: `Paiement du client ${reservation.clientName}`,
+        type: 'credit',
+        debit: 0,
+      };
+      dispatch(setReservation({ ...reservationMaj, idCashMovement: mouvement.id }));
+      dispatch(setCashMouvement(mouvement));
+    }
+  };
 
   const valider = async () => {
     const valeur = Number(montant);
@@ -358,7 +385,7 @@ const PaiementModal = ({ reservation, onClose }: PaiementModalProps) => {
     try {
       setEnCours(true);
       setErreur('');
-      await enregistrerPaiement(reservation, valeur);
+      enregistrerPaiement(valeur);
       onClose();
     } catch (e) {
       setErreur(e instanceof Error ? e.message : "Erreur lors de l'enregistrement du paiement.");
