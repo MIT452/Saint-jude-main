@@ -7,6 +7,7 @@ import { useDispatch, useSelector } from "react-redux";
 import { deletGoods, setCashMouvement, setReservation, upDateGood } from "../redux/feature/stJude";
 import { Input } from "./ui/input";
 import Tables from "./tools/TableGoods";
+import ConfirmDialog from "./ConfirmDialog";
 import { RootState } from "../redux";
 import { findBoat, formatCurrency } from "../Tools/Tools";
 import { v4 as uuid } from "uuid";
@@ -17,17 +18,33 @@ interface ReservationFormProps {
   currentGoods: Goods[];
 }
 
+// Nom lisible d'une marchandise pour le message de confirmation
+const libelleMarchandise = (good: Goods | null): string => {
+  const record = good as unknown as Record<string, unknown> | null;
+  for (const cle of ["name", "goodsName", "nom", "designation", "label", "libelle"]) {
+    const valeur = record?.[cle];
+    if (typeof valeur === "string" && valeur.trim()) return valeur.trim();
+  }
+  return "cette marchandise";
+};
+
 const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, currentGoods }) => {
   const [cReservation, setCReservation] = useState<Reservation>(currentReservation);
   const [stateGoods, setStateGoods] = useState<Goods[]>(currentGoods);
   const [idGoodsDeleted, setIdGoodsDeleted] = useState<string[]>([]);
+  // Marchandise en attente de confirmation de suppression
+  const [aSupprimer, setASupprimer] = useState<Goods | null>(null);
 
-  useEffect(() => { setStateGoods(stateGoods) }, [currentGoods])
+  useEffect(() => {
+    setStateGoods(currentGoods);
+    setIdGoodsDeleted([]);
+  }, [currentGoods]);
 
   const dispatch = useDispatch();
   const { boat: allBoat, cashMouvement, trip } = useSelector((state: RootState) => state.stJude);
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
-  const curretTripe = trip.find(({ id }) => id === currentReservation.tripId)
+  const curretTripe = trip.find(({ id }) => id === currentReservation.tripId);
+  const boatTrip = curretTripe ? findBoat(curretTripe.boatId as string, allBoat) : undefined;
 
   const handleInput = (field: keyof Reservation, value: string | number) => {
     if (field === "amountPaid") {
@@ -53,40 +70,41 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
       }
     }
     dispatch(setReservation(cReservation));
-    let currentCashMouvement = cashMouvement.find(({ id }) => cReservation.idCashMovement === id);
+    const total = stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0);
+    const currentCashMouvement = cashMouvement.find(({ id }) => cReservation.idCashMovement === id);
     if (currentCashMouvement) {
-      let cashMouvement: CashMovement = {
+      const cashMouvementMaj: CashMovement = {
         ...currentCashMouvement,
         credit: cReservation.amountPaid,
-        userId: currentUser ? currentUser.id : '',
+        userId: currentUser ? currentUser.id : "",
         date: new Date().toISOString(),
-      }
-      let reservation: Reservation = {
+      };
+      const reservation: Reservation = {
         ...cReservation,
-        totalPrice: stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0),
-        amountToPay: stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0) - cReservation.amountPaid,
-      }
-      dispatch(setCashMouvement(cashMouvement));
+        totalPrice: total,
+        amountToPay: Math.max(total - cReservation.amountPaid, 0),
+      };
+      dispatch(setCashMouvement(cashMouvementMaj));
       dispatch(setReservation(reservation));
     }
-    // si il n'a pas encore payer 
+    // s'il n'a pas encore payé
     else {
-      let cashMouvement: CashMovement = {
+      const cashMouvementNouveau: CashMovement = {
         id: uuid(),
         credit: cReservation.amountPaid,
-        userId: currentUser ? currentUser.id : '',
+        userId: currentUser ? currentUser.id : "",
         date: new Date().toISOString(),
         tripId: cReservation.tripId,
         designation: `Paiement du client ${cReservation.clientName}`,
-        type: 'credit',
+        type: "credit",
         debit: 0,
-      }
-      let reservation: Reservation = {
+      };
+      const reservation: Reservation = {
         ...cReservation,
-        idCashMovement: cashMouvement.id,
-      }
+        idCashMovement: cashMouvementNouveau.id,
+      };
       dispatch(setReservation(reservation));
-      dispatch(setCashMouvement(cashMouvement));
+      dispatch(setCashMouvement(cashMouvementNouveau));
     }
     onClose();
   };
@@ -96,32 +114,68 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
       prevGoods.map((good) =>
         good.id === updatedGood.id
           ? {
-            ...good,
-            ...updatedGood,
-            totalWeight: updatedGood.quantity * updatedGood.unitWeight,
-            totalPrice: updatedGood.quantity * updatedGood.unitPrice,
-          }
+              ...good,
+              ...updatedGood,
+              totalWeight: updatedGood.quantity * updatedGood.unitWeight,
+              totalPrice: updatedGood.quantity * updatedGood.unitPrice,
+            }
           : good
       )
     );
   };
+
+  // Clic sur la corbeille : on demande d'abord confirmation
   const onDeleteGoods = (idGoods: string) => {
-    setStateGoods((prev) => prev.filter(({ id }) => id !== idGoods))
-    setIdGoodsDeleted([...idGoodsDeleted, idGoods]);
-  }
+    const good = stateGoods.find(({ id }) => id === idGoods);
+    if (good) setASupprimer(good);
+  };
+
+  // Confirmation : la marchandise disparaît de la liste (enregistré au clic sur « Confirmer la modification »)
+  const confirmerSuppression = () => {
+    if (!aSupprimer) return;
+    const idGoods = aSupprimer.id;
+    setStateGoods((prev) => prev.filter(({ id }) => id !== idGoods));
+    setIdGoodsDeleted((prev) => (prev.includes(idGoods) ? prev : [...prev, idGoods]));
+    setASupprimer(null);
+  };
+
+  // Remet les marchandises supprimées (avant l'enregistrement)
+  const annulerSuppressions = () => {
+    setStateGoods((prev) => [...prev, ...currentGoods.filter(({ id }) => idGoodsDeleted.includes(id))]);
+    setIdGoodsDeleted([]);
+  };
+
   useEffect(() => {
-    setCReservation({
-      ...cReservation,
-      totalPrice: stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0),
-      amountToPay: stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0) - cReservation.amountPaid,
-    })
-  }, [stateGoods])
+    const total = stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0);
+    setCReservation((prev) => ({
+      ...prev,
+      totalPrice: total,
+      amountToPay: Math.max(total - prev.amountPaid, 0),
+    }));
+  }, [stateGoods]);
+
   return (
     <div className="flex fixed items-center justify-center inset-0 flex-col p-2.5 z-50">
       <div className="fixed inset-0 bg-black/50" onClick={onClose}></div>
       <div className="z-50 w-[80%] space-y-6 overflow-auto bg-white p-6 rounded-lg max-h-[90vh]">
+        {idGoodsDeleted.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-sm text-orange-800">
+            <span>
+              {idGoodsDeleted.length} marchandise(s) supprimée(s). Cliquez sur « Confirmer la modification » pour
+              enregistrer.
+            </span>
+            <Button size="sm" variant="outline" onClick={annulerSuppressions}>
+              Annuler la suppression
+            </Button>
+          </div>
+        )}
         <div className="overflow-x-auto">
-          <Tables currentGoods={stateGoods} reservationClient={currentReservation.clientName} onUpdateGood={handleUpdateGood} onDeleteGoods={onDeleteGoods} />
+          <Tables
+            currentGoods={stateGoods}
+            reservationClient={currentReservation.clientName}
+            onUpdateGood={handleUpdateGood}
+            onDeleteGoods={onDeleteGoods}
+          />
         </div>
         {/* Actions */}
         <div className="flex flex-col gap-4 mt-6">
@@ -134,9 +188,13 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
               <CardContent className="space-y-3">
                 <div className="text-xl font-bold flex gap-6 items-center">
                   <span>Prix total : {formatCurrency(cReservation.totalPrice)}</span>
-                  {currentUser && currentUser.role !== "Capitaine" && <Button onClick={payTotal} className="w-fit">Payer la totalité</Button>}
+                  {currentUser && currentUser.role !== "Capitaine" && (
+                    <Button onClick={payTotal} className="w-fit">
+                      Payer la totalité
+                    </Button>
+                  )}
                 </div>
-                {currentUser && currentUser.role !== "Capitaine" &&
+                {currentUser && currentUser.role !== "Capitaine" && (
                   <div className="flex items-center gap-2">
                     <Label className="whitespace-nowrap">Montant payé :</Label>
                     <Input
@@ -145,12 +203,13 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
                       onChange={(e) => handleInput("amountPaid", e.target.value)}
                       className="w-40"
                     />
-                  </div>}
+                  </div>
+                )}
 
                 <div className="text-sm text-muted-foreground">
                   {cReservation.amountPaid <= cReservation.totalPrice ? (
                     <span className="text-green-600">
-                      Montant restant :{" "}{formatCurrency(cReservation.totalPrice - cReservation.amountPaid)}
+                      Montant restant : {formatCurrency(cReservation.totalPrice - cReservation.amountPaid)}
                     </span>
                   ) : (
                     <span className="text-red-600">Le montant saisi est supérieur</span>
@@ -168,12 +227,14 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
                   <span className="font-semibold text-gray-700">Voyage :</span>
                   <div className="flex flex-col text-gray-600">
                     <span>
-                      {curretTripe && `${curretTripe.from} → ${curretTripe.to} ( ${new Date(curretTripe.depart).toLocaleString('fr-FR', {
-                        day: "2-digit",
-                        month: "short",
-                        year: "numeric",
-                      })} )`}</span>
-                    <span>avec {findBoat(curretTripe?.boatId as string, allBoat).name}</span>
+                      {curretTripe &&
+                        `${curretTripe.from} → ${curretTripe.to} ( ${new Date(curretTripe.depart).toLocaleString("fr-FR", {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        })} )`}
+                    </span>
+                    {boatTrip && <span>avec {boatTrip.name}</span>}
                   </div>
                 </div>
 
@@ -207,9 +268,25 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
           </div>
 
           {/* Confirmer */}
-          <Button className="px-6 py-6 text-lg" onClick={onUpdate}>Confirmer la modification</Button>
+          <Button className="px-6 py-6 text-lg" onClick={onUpdate}>
+            Confirmer la modification
+          </Button>
         </div>
       </div>
+
+      <ConfirmDialog
+        open={aSupprimer !== null}
+        title="Supprimer la marchandise"
+        message={`Voulez-vous vraiment supprimer « ${libelleMarchandise(aSupprimer)} » de la réservation de ${
+          currentReservation.clientName
+        } ?${
+          stateGoods.length === 1
+            ? " C'est la dernière marchandise : la réservation sera vide."
+            : ""
+        } La suppression sera enregistrée quand vous cliquerez sur « Confirmer la modification ».`}
+        onCancel={() => setASupprimer(null)}
+        onConfirm={confirmerSuppression}
+      />
     </div>
   );
 };
