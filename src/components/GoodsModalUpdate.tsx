@@ -12,13 +12,13 @@ import { RootState } from "../redux";
 import { findBoat, formatCurrency } from "../Tools/Tools";
 import { v4 as uuid } from "uuid";
 
-// URL de l'API Flask (à définir dans .env : VITE_API_URL=http://localhost:5000/api)
-const API_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:5000/api";
+// URL de l'API Express (à définir dans .env : VITE_API_URL=http://localhost:3000/api)
+const API_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3000/api";
 
-// Supprime une ressource dans la base (Neon) via l'API Flask.
+// Supprime une ressource dans la base (Neon) via l'API Express (cookies de session envoyés).
 // Un 404 est accepté : la ligne n'existe déjà plus côté base.
 const supprimerDansBase = async (chemin: string): Promise<void> => {
-  const reponse = await fetch(`${API_URL}${chemin}`, { method: "DELETE" });
+  const reponse = await fetch(`${API_URL}${chemin}`, { method: "DELETE", credentials: "include" });
   if (!reponse.ok && reponse.status !== 404) {
     let detail = "";
     try {
