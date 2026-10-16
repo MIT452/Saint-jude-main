@@ -12,6 +12,25 @@ import { RootState } from "../redux";
 import { findBoat, formatCurrency } from "../Tools/Tools";
 import { v4 as uuid } from "uuid";
 
+// URL de l'API Flask (à définir dans .env : VITE_API_URL=http://localhost:5000/api)
+const API_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:5000/api";
+
+// Supprime une ressource dans la base (Neon) via l'API Flask.
+// Un 404 est accepté : la ligne n'existe déjà plus côté base.
+const supprimerDansBase = async (chemin: string): Promise<void> => {
+  const reponse = await fetch(`${API_URL}${chemin}`, { method: "DELETE" });
+  if (!reponse.ok && reponse.status !== 404) {
+    let detail = "";
+    try {
+      const corps = (await reponse.json()) as { error?: string; message?: string };
+      detail = corps.error ?? corps.message ?? "";
+    } catch {
+      // réponse sans JSON
+    }
+    throw new Error(`Suppression refusée par le serveur (${reponse.status})${detail ? ` : ${detail}` : ""}`);
+  }
+};
+
 interface ReservationFormProps {
   onClose: () => void;
   currentReservation: Reservation;
@@ -34,6 +53,8 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
   const [idGoodsDeleted, setIdGoodsDeleted] = useState<string[]>([]);
   // Marchandise en attente de confirmation de suppression
   const [aSupprimer, setASupprimer] = useState<Goods | null>(null);
+  const [enCours, setEnCours] = useState(false);
+  const [erreur, setErreur] = useState("");
 
   useEffect(() => {
     setStateGoods(currentGoods);
@@ -60,15 +81,35 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
     setCReservation((prev) => ({ ...prev, amountPaid: prev.totalPrice, amountToPay: 0, paymentStatus: true }));
   };
 
-  const onUpdate = () => {
+  const onUpdate = async () => {
+    if (enCours) return;
+    setErreur("");
+
+    // 1. Suppression dans la base AVANT de toucher au store :
+    //    si le serveur refuse, rien ne change à l'écran et l'erreur est affichée.
+    try {
+      setEnCours(true);
+      for (const idGoods of idGoodsDeleted) {
+        await supprimerDansBase(`/goods/${idGoods}`);
+      }
+      // Dernière marchandise supprimée : on supprime aussi la réservation vide (et non plus seulement la cacher)
+      if (stateGoods.length === 0 && idGoodsDeleted.length > 0) {
+        await supprimerDansBase(`/reservations/${currentReservation.id}`);
+      }
+    } catch (e) {
+      setErreur(e instanceof Error ? e.message : "Erreur lors de la suppression.");
+      setEnCours(false);
+      return;
+    }
+
+    // 2. Mise à jour du store Redux (comme avant)
     for (const currentGood of stateGoods) {
       dispatch(upDateGood(currentGood));
     }
-    if (idGoodsDeleted.length !== 0) {
-      for (const idGoods of idGoodsDeleted) {
-        dispatch(deletGoods(idGoods));
-      }
+    for (const idGoods of idGoodsDeleted) {
+      dispatch(deletGoods(idGoods));
     }
+
     // Totaux recalculés à partir des marchandises restantes (quantité, poids, prix)
     const total = stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0);
     const quantite = stateGoods.reduce((acc, g) => acc + Number(g.quantity), 0);
@@ -110,6 +151,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
       dispatch(setReservation(reservation));
       dispatch(setCashMouvement(cashMouvementNouveau));
     }
+    setEnCours(false);
     onClose();
   };
 
@@ -160,7 +202,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
 
   return (
     <div className="flex fixed items-center justify-center inset-0 flex-col p-2.5 z-50">
-      <div className="fixed inset-0 bg-black/50" onClick={onClose}></div>
+      <div className="fixed inset-0 bg-black/50" onClick={enCours ? undefined : onClose}></div>
       <div className="z-50 w-[80%] space-y-6 overflow-auto bg-white p-6 rounded-lg max-h-[90vh]">
         {idGoodsDeleted.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-sm text-orange-800">
@@ -168,7 +210,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
               {idGoodsDeleted.length} marchandise(s) supprimée(s). Cliquez sur « Confirmer la modification » pour
               enregistrer.
             </span>
-            <Button size="sm" variant="outline" onClick={annulerSuppressions}>
+            <Button size="sm" variant="outline" onClick={annulerSuppressions} disabled={enCours}>
               Annuler la suppression
             </Button>
           </div>
@@ -271,9 +313,13 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
             </Card>
           </div>
 
+          {erreur && (
+            <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{erreur}</p>
+          )}
+
           {/* Confirmer */}
-          <Button className="px-6 py-6 text-lg" onClick={onUpdate}>
-            Confirmer la modification
+          <Button className="px-6 py-6 text-lg" onClick={onUpdate} disabled={enCours}>
+            {enCours ? "Enregistrement..." : "Confirmer la modification"}
           </Button>
         </div>
       </div>
@@ -285,7 +331,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
           currentReservation.clientName
         } ?${
           stateGoods.length === 1
-            ? " C'est la dernière marchandise : la réservation sera vide."
+            ? " C'est la dernière marchandise : la réservation sera supprimée."
             : ""
         } La suppression sera enregistrée quand vous cliquerez sur « Confirmer la modification ».`}
         onCancel={() => setASupprimer(null)}
