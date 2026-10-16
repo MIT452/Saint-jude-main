@@ -12,6 +12,7 @@ import FuelConsumption from "./components/FuelConsumption";
 import Audit from "./components/Audit";
 import IntelligenceDashboard from "./components/IntelligenceDashboard";
 import ReservationExperience from "./components/ReservationExperience";
+import DataAnalysis from "./components/DataAnalysis";
 import { useSelector } from "react-redux";
 import { RootState } from "./redux";
 import { menuItems } from "./components/SidebarMenue";
@@ -64,6 +65,8 @@ const App = () => {
         return <IntelligenceDashboard />
       case "reservations":
         return <ReservationExperience />
+      case "analytics":
+        return <DataAnalysis />
       default:
         return <Profile />
     }

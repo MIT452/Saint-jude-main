@@ -82,4 +82,11 @@ export const menuItems = [
     description: "Réservation, IA, voix et notifications",
     permission: "merchandise:manage" as Permission,
   },
+  {
+    id: "analytics",
+    label: "Analyse des données",
+    icon: BarChart3,
+    description: "Caisse, carburant, réservations",
+    permission: "intelligence:read" as Permission,
+  },
 ];
