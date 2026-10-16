@@ -515,18 +515,23 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
   };
 
   // Réservations visibles selon le rôle (un Capitaine ne voit que celles de ses bateaux)
-  const reservationsVisibles = useMemo(
-    () =>
-      allReservation.filter((reservation) => {
+  const reservationsVisibles = useMemo(() => {
+    // Réservations dont toutes les marchandises ont été supprimées (0 Ar, rien payé) : on ne les affiche plus
+    const idsAvecMarchandises = new Set(allGoods.map(({ reservationId }) => reservationId));
+    return allReservation.filter((reservation) => {
+        const vide =
+          !idsAvecMarchandises.has(reservation.id) &&
+          !(Number(reservation.totalPrice) > 0) &&
+          !(Number(reservation.amountPaid) > 0);
+        if (vide) return false;
         if (currentUser && currentUser.role === 'Capitaine') {
           const trip = findTrip(reservation.tripId, alltrip);
           const boat = trip ? findBoat(trip.boatId, allBoat) : undefined;
           if (!boat || !boat.crew.includes(currentUser.id)) return false;
         }
         return true;
-      }),
-    [allReservation, allBoat, alltrip, currentUser]
-  );
+      });
+  }, [allReservation, allGoods, allBoat, alltrip, currentUser]);
 
   const marchandisesVisibles = useMemo(() => {
     const ids = new Set(reservationsVisibles.map((reservation) => reservation.id));

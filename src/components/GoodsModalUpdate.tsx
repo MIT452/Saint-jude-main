@@ -69,8 +69,16 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
         dispatch(deletGoods(idGoods));
       }
     }
-    dispatch(setReservation(cReservation));
+    // Totaux recalculés à partir des marchandises restantes (quantité, poids, prix)
     const total = stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0);
+    const quantite = stateGoods.reduce((acc, g) => acc + Number(g.quantity), 0);
+    const poids = stateGoods.reduce((acc, g) => acc + Number(g.totalWeight), 0);
+    const reservationBase: Reservation = {
+      ...cReservation,
+      totalPrice: total,
+      amountToPay: Math.max(total - cReservation.amountPaid, 0),
+      ...({ quantity: quantite, weight: poids } as unknown as Partial<Reservation>),
+    };
     const currentCashMouvement = cashMouvement.find(({ id }) => cReservation.idCashMovement === id);
     if (currentCashMouvement) {
       const cashMouvementMaj: CashMovement = {
@@ -79,11 +87,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
         userId: currentUser ? currentUser.id : "",
         date: new Date().toISOString(),
       };
-      const reservation: Reservation = {
-        ...cReservation,
-        totalPrice: total,
-        amountToPay: Math.max(total - cReservation.amountPaid, 0),
-      };
+      const reservation: Reservation = reservationBase;
       dispatch(setCashMouvement(cashMouvementMaj));
       dispatch(setReservation(reservation));
     }
@@ -100,7 +104,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
         debit: 0,
       };
       const reservation: Reservation = {
-        ...cReservation,
+        ...reservationBase,
         idCashMovement: cashMouvementNouveau.id,
       };
       dispatch(setReservation(reservation));
