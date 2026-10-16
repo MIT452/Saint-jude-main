@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   BarChart3,
@@ -9,12 +9,9 @@ import {
   Clock,
   CreditCard,
   Download,
-  Droplet,
   Eye,
   Filter,
-  Hammer,
   Layers,
-  Leaf,
   Package,
   Plus,
   Search,
@@ -33,6 +30,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from './ui/badge';
 import { RootState } from '../redux';
 import { findBoat, findTrip, formatCityName, formatCurrency } from '../Tools/Tools';
+import { askAssistant } from '../data/intelligenceService';
 import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
@@ -153,25 +151,151 @@ const normaliserTexte = (valeur?: string) =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
-// Lecture sécurisée de champs optionnels
-const lireChamp = (source: unknown, cles: string[]): string => {
+// Cherche un texte dans un objet : d'abord les clés connues, puis toute clé qui correspond au motif
+const trouverTexte = (source: unknown, cles: string[], motif: RegExp, exclure?: RegExp): string => {
   const record = source as Record<string, unknown> | undefined;
+  if (!record) return '';
   for (const cle of cles) {
-    const valeur = record?.[cle];
-    if (typeof valeur === 'string' && valeur) return valeur;
+    const valeur = record[cle];
+    if (typeof valeur === 'string' && valeur.trim()) return valeur.trim();
+  }
+  for (const [cle, valeur] of Object.entries(record)) {
+    if (typeof valeur === 'string' && valeur.trim() && motif.test(cle) && !(exclure && exclure.test(cle))) {
+      return valeur.trim();
+    }
   }
   return '';
 };
 
 const nomMarchandise = (item: Goods) =>
-  lireChamp(item, ['name', 'type', 'designation', 'label', 'goodsType', 'title']);
+  trouverTexte(
+    item,
+    ['name', 'goodsName', 'nom', 'designation', 'label', 'libelle', 'title', 'description', 'productName', 'item', 'type', 'goodsType'],
+    /name|nom|desig|label|libelle|title|descr|product|item|marchand|goods|type/i,
+    /id$|^id|reservation|user|client|trip|boat|created|updated|date|status/i
+  );
 
-function IconeMarchandise({ nom }: { nom: string }) {
+// Photo du bateau (ajoutée depuis « Gestion de bateau »)
+const photoBateau = (bateau: unknown) =>
+  trouverTexte(bateau, ['image', 'photo', 'imageUrl', 'picture', 'img'], /image|photo|picture|img/i);
+
+/* =========================
+   Icône de marchandise (même principe que dans le récapitulatif du formulaire)
+   1. icône enregistrée sur la marchandise (champ icon / emoji)
+   2. emoji reconnu par mot-clé
+   3. sinon l'IA propose un emoji, gardé en cache dans le navigateur
+========================= */
+const EMOJIS: [RegExp, string][] = [
+  [/moto|scooter|motard/, '🏍️'],
+  [/voiture|\bauto\b|taxi|\bcar\b/, '🚗'],
+  [/camion|truck/, '🚚'],
+  [/velo|bicyclette|\bbike\b/, '🚲'],
+  [/bateau|pirogue|barque/, '🚤'],
+  [/pomme de terre|patate/, '🥔'],
+  [/fruit|pomme/, '🍎'],
+  [/banane/, '🍌'],
+  [/mangue/, '🥭'],
+  [/ananas/, '🍍'],
+  [/litchi|letchi/, '🍒'],
+  [/legume|carotte/, '🥕'],
+  [/tomate/, '🍅'],
+  [/oignon/, '🧅'],
+  [/manioc/, '🍠'],
+  [/\briz\b/, '🍚'],
+  [/\bble\b|\bmais\b|cereale/, '🌾'],
+  [/vanille/, '🌿'],
+  [/girofle|epice|poivre/, '🌶️'],
+  [/cafe/, '☕'],
+  [/cacao|chocolat/, '🍫'],
+  [/\bthe\b/, '🍵'],
+  [/sucre/, '🍬'],
+  [/\bsel\b/, '🧂'],
+  [/gasoil|diesel|carbur|essence|petrole|fuel/, '⛽'],
+  [/\bgaz\b/, '🔥'],
+  [/huile/, '🛢️'],
+  [/bois|planche|bambou/, '🪵'],
+  [/ciment|brique|construct|\bfer\b|tole|acier/, '🧱'],
+  [/vetement|habit|tissu|chaussure/, '👕'],
+  [/poisson|crevette|crabe|langouste/, '🐟'],
+  [/viande|zebu|boeuf|poulet|porc|volaille/, '🥩'],
+  [/meuble|table|chaise|\blit\b|armoire/, '🪑'],
+  [/medicament|pharma/, '💊'],
+  [/ordinateur|telephone|electro|\btele\b|frigo|radio/, '💻'],
+  [/eau|boisson|jus|biere|soda/, '🥤'],
+  [/livre|papier|carton|colis/, '📦'],
+];
+
+const emojiLocal = (nom: string): string => {
   const valeur = normaliserTexte(nom);
-  if (/riz|vanille|cafe|girofle|agri|fruit|legume/.test(valeur)) return <Leaf className="h-5 w-5 text-amber-600" />;
-  if (/gasoil|petrole|carbur|essence|huile/.test(valeur)) return <Droplet className="h-5 w-5 text-blue-900" />;
-  if (/bois|construct|ciment|fer/.test(valeur)) return <Hammer className="h-5 w-5 text-red-500" />;
-  return <Package className="h-5 w-5 text-blue-600" />;
+  for (const [motif, emoji] of EMOJIS) if (motif.test(valeur)) return emoji;
+  return '';
+};
+
+const iconeStockee = (item: Goods): string => {
+  const valeur = trouverTexte(item, ['icon', 'emoji', 'icone', 'goodsIcon'], /icon|emoji/i);
+  return valeur && valeur.length <= 8 ? valeur : '';
+};
+
+const CLE_CACHE_ICONES = 'saintjude.goodsIcons';
+
+const lireCacheIcones = (): Record<string, string> => {
+  try {
+    return JSON.parse(localStorage.getItem(CLE_CACHE_ICONES) ?? '{}') as Record<string, string>;
+  } catch {
+    return {};
+  }
+};
+
+const extraireEmoji = (texte: string): string =>
+  texte.match(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/u)?.[0] ?? '';
+
+// Demande un emoji à l'IA pour les marchandises qu'aucun mot-clé ne reconnaît
+function useIconesIA(noms: string[]) {
+  const [icones, setIcones] = useState<Record<string, string>>(lireCacheIcones);
+  const enCours = useRef(new Set<string>());
+  const signature = noms.join('|');
+
+  useEffect(() => {
+    noms.forEach(async (nom) => {
+      const cle = normaliserTexte(nom);
+      if (!cle || icones[cle] || emojiLocal(nom) || enCours.current.has(cle)) return;
+      enCours.current.add(cle);
+      try {
+        const reponse: unknown = await askAssistant({
+          question: `Réponds uniquement par un seul emoji qui représente cette marchandise : "${nom}".`,
+          context: '',
+        });
+        const emoji = extraireEmoji(typeof reponse === 'string' ? reponse : JSON.stringify(reponse ?? ''));
+        if (!emoji) return;
+        setIcones((courant) => {
+          const suite = { ...courant, [cle]: emoji };
+          try {
+            localStorage.setItem(CLE_CACHE_ICONES, JSON.stringify(suite));
+          } catch {
+            // stockage indisponible : l'icône reste affichée pour cette session
+          }
+          return suite;
+        });
+      } catch {
+        // L'IA est facultative : on garde l'icône par défaut
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+
+  return icones;
+}
+
+function PastilleMarchandise({ emoji, petite = false }: { emoji: string; petite?: boolean }) {
+  return (
+    <span
+      className={`flex shrink-0 items-center justify-center rounded-full bg-amber-100 ${
+        petite ? 'h-7 w-7 text-sm' : 'h-9 w-9 text-lg'
+      }`}
+    >
+      {emoji}
+    </span>
+  );
 }
 
 const exporterCsv = (lignes: string[][]) => {
@@ -332,7 +456,7 @@ function CarteStat({
           {icone}
         </span>
         <div className="min-w-0">
-          <p className={`truncate text-sm font-medium ${couleurs.titre}`}>{titre}</p>
+          <p className={`text-sm font-medium leading-tight ${couleurs.titre}`}>{titre}</p>
           <p className="text-3xl font-bold leading-tight text-blue-950">{valeur}</p>
         </div>
       </div>
@@ -416,6 +540,24 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     });
     return carte;
   }, [marchandisesVisibles]);
+
+  const nomsMarchandises = useMemo(
+    () => Array.from(new Set(marchandisesVisibles.map(nomMarchandise).filter(Boolean))),
+    [marchandisesVisibles]
+  );
+  const iconesIA = useIconesIA(nomsMarchandises);
+
+  const emojiNom = (nom: string) => emojiLocal(nom) || iconesIA[normaliserTexte(nom)] || '📦';
+  const emojiMarchandise = (item: Goods) => iconeStockee(item) || emojiNom(nomMarchandise(item));
+
+  // Photo du premier bateau qui en possède une (bannière de droite)
+  const photoBanniere = useMemo(() => {
+    for (const bateau of allBoat) {
+      const photo = photoBateau(bateau);
+      if (photo) return photo;
+    }
+    return '';
+  }, [allBoat]);
 
   const filteredReservations = useMemo(() => {
     const search = searchTerm.toLowerCase();
@@ -670,7 +812,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
               )}
 
               <div className="overflow-x-auto px-4">
-                <Table>
+                <Table className="[&_td]:px-2 [&_th]:px-2">
                   <TableHeader>
                     <TableRow className="bg-blue-800 hover:bg-blue-800 [&>th]:text-white">
                       <TableHead className="w-10 rounded-l-lg">
@@ -699,7 +841,12 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                       const statut = getStatutLigne(reservation);
                       const etatPaiement = getEtatPaiement(reservation);
                       const marchandises = marchandisesParReservation.get(reservation.id) ?? [];
-                      const premier = marchandises.length ? nomMarchandise(marchandises[0]) : '';
+                      const premierItem = marchandises[0];
+                      const premier = premierItem ? nomMarchandise(premierItem) : '';
+                      const emoji = premierItem ? emojiMarchandise(premierItem) : '📦';
+                      const bateau = trip ? findBoat(trip.boatId, allBoat) : undefined;
+                      const photo = photoBateau(bateau);
+                      const nomBateau = trouverTexte(bateau, ['name'], /^name$/i);
                       const supplement = marchandises.length > 1 ? ` +${marchandises.length - 1}` : '';
                       return (
                         <TableRow
@@ -718,9 +865,17 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-3">
-                              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
-                                <Ship className="h-5 w-5" />
-                              </span>
+                              {photo ? (
+                                <img
+                                  src={photo}
+                                  alt={nomBateau || 'Bateau'}
+                                  className="h-10 w-14 shrink-0 rounded-md object-cover"
+                                />
+                              ) : (
+                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
+                                  <Ship className="h-5 w-5" />
+                                </span>
+                              )}
                               {trip ? (
                                 <div>
                                   <p className="whitespace-nowrap font-medium">
@@ -732,6 +887,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                                       month: 'short',
                                       year: 'numeric',
                                     })}
+                                    {nomBateau ? ` · ${nomBateau}` : ''}
                                   </p>
                                 </div>
                               ) : (
@@ -741,10 +897,10 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <IconeMarchandise nom={premier} />
+                              <PastilleMarchandise emoji={emoji} />
                               <div>
                                 <p className="font-semibold text-blue-900">
-                                  {premier ? `${premier}${supplement}` : '—'}
+                                  {premier ? `${premier}${supplement}` : 'Marchandise'}
                                 </p>
                                 <p className="text-xs text-gray-500">{reservation.clientName}</p>
                               </div>
@@ -774,26 +930,29 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                           <TableCell>
                             <div className="flex items-center justify-center gap-1">
                               <Button
-                                size="sm"
-                                variant="outline"
+                                size="icon"
+                                title="Voir"
+                                aria-label="Voir"
+                                className="h-8 w-8 bg-blue-600 text-white hover:bg-blue-700"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   onShowDetailGoodsModal(reservation);
                                 }}
                               >
-                                <Eye className="mr-1 h-4 w-4" /> Voir
+                                <Eye className="h-4 w-4" />
                               </Button>
                               {etatPaiement === 'PARTIEL' && (
                                 <Button
-                                  size="sm"
-                                  className="bg-orange-500 text-white hover:bg-orange-600"
+                                  size="icon"
+                                  aria-label="Ajouter paiement"
+                                  className="h-8 w-8 bg-orange-500 text-white hover:bg-orange-600"
                                   title="Ajouter paiement"
                                   onClick={(e) => {
                                     e.stopPropagation(); // n'ouvre pas le détail de la ligne
                                     setReservationPaiement(reservation);
                                   }}
                                 >
-                                  <CreditCard className="mr-1 h-4 w-4" /> Ajouter paiement
+                                  <CreditCard className="h-4 w-4" />
                                 </Button>
                               )}
                             </div>
@@ -859,7 +1018,14 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
         {/* ===== Colonne de droite ===== */}
         <div className="space-y-4">
           <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-sky-500 to-blue-800 p-4 text-white shadow-md">
-            <Ship className="absolute -right-2 -top-2 h-24 w-24 text-white/15" />
+            {photoBanniere ? (
+              <>
+                <img src={photoBanniere} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                <div className="absolute inset-0 bg-gradient-to-r from-blue-900/90 via-blue-800/70 to-transparent" />
+              </>
+            ) : (
+              <Ship className="absolute -right-2 -top-2 h-24 w-24 text-white/15" />
+            )}
             <p className="relative text-lg font-semibold leading-snug">
               Les marchandises
               <br />
@@ -900,7 +1066,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                   {stats.types.slice(0, 5).map(([nom, nombre]) => (
                     <div key={nom} className="flex items-center justify-between text-sm">
                       <span className="flex items-center gap-2">
-                        <IconeMarchandise nom={nom} /> {nom}
+                        <PastilleMarchandise emoji={emojiNom(nom)} petite /> {nom}
                       </span>
                       <span className="font-medium text-blue-900">{nombre}</span>
                     </div>
