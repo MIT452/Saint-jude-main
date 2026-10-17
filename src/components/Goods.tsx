@@ -182,9 +182,10 @@ const photoBateau = (bateau: unknown) =>
 
 /* =========================
    Icône de marchandise (même principe que dans le récapitulatif du formulaire)
-   1. icône enregistrée sur la marchandise (champ icon / emoji)
-   2. emoji reconnu par mot-clé
-   3. sinon l'IA propose un emoji, gardé en cache dans le navigateur
+   1. emoji reconnu par mot-clé d'après le NOM ACTUEL de la marchandise
+   2. emoji proposé par l'IA pour ce nom (gardé en cache dans le navigateur)
+   3. icône enregistrée sur la marchandise (champ icon / emoji)
+   4. sinon 📦
 ========================= */
 const EMOJIS: [RegExp, string][] = [
   [/moto|scooter|motard/, '🏍️'],
@@ -279,6 +280,8 @@ function useIconesIA(noms: string[]) {
         });
       } catch {
         // L'IA est facultative : on garde l'icône par défaut
+      } finally {
+        enCours.current.delete(cle); // permet de réessayer au prochain changement de nom
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -580,7 +583,11 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
   const iconesIA = useIconesIA(nomsMarchandises);
 
   const emojiNom = (nom: string) => emojiLocal(nom) || iconesIA[normaliserTexte(nom)] || '📦';
-  const emojiMarchandise = (item: Goods) => iconeStockee(item) || emojiNom(nomMarchandise(item));
+  // Le NOM ACTUEL de la marchandise l'emporte : renommer une marchandise met à jour son icône
+  const emojiMarchandise = (item: Goods) => {
+    const nom = nomMarchandise(item);
+    return emojiLocal(nom) || iconesIA[normaliserTexte(nom)] || iconeStockee(item) || '📦';
+  };
 
   // Photo du premier bateau qui en possède une (bannière de droite)
   const photoBanniere = useMemo(() => {
