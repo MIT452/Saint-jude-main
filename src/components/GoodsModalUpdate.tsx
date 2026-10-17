@@ -2,7 +2,7 @@ import { useState, FC, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import { Button } from "./ui/button";
 import { Label } from "./ui/label";
-import { CashMovement, Goods, Reservation } from "../data/type";
+import { CashMovement, Goods, Reservation, TABLE_DATA_BASE } from "../data/type";
 import { useDispatch, useSelector } from "react-redux";
 import { deletGoods, setCashMouvement, setReservation, upDateGood } from "../redux/feature/stJude";
 import { Input } from "./ui/input";
@@ -11,25 +11,8 @@ import ConfirmDialog from "./ConfirmDialog";
 import { RootState } from "../redux";
 import { findBoat, formatCurrency } from "../Tools/Tools";
 import { v4 as uuid } from "uuid";
-
-// URL de l'API Express (à définir dans .env : VITE_API_URL=http://localhost:3000/api)
-const API_URL: string = (import.meta.env.VITE_API_URL as string | undefined) ?? "http://localhost:3000/api";
-
-// Supprime une ressource dans la base (Neon) via l'API Express (cookies de session envoyés).
-// Un 404 est accepté : la ligne n'existe déjà plus côté base.
-const supprimerDansBase = async (chemin: string): Promise<void> => {
-  const reponse = await fetch(`${API_URL}${chemin}`, { method: "DELETE", credentials: "include" });
-  if (!reponse.ok && reponse.status !== 404) {
-    let detail = "";
-    try {
-      const corps = (await reponse.json()) as { error?: string; message?: string };
-      detail = corps.error ?? corps.message ?? "";
-    } catch {
-      // réponse sans JSON
-    }
-    throw new Error(`Suppression refusée par le serveur (${reponse.status})${detail ? ` : ${detail}` : ""}`);
-  }
-};
+import { toast } from "react-toastify";
+import { onAddService, onDeleteService, onUpdateService } from "../data/service";
 
 interface ReservationFormProps {
   onClose: () => void;
@@ -37,24 +20,13 @@ interface ReservationFormProps {
   currentGoods: Goods[];
 }
 
-// Nom lisible d'une marchandise pour le message de confirmation
-const libelleMarchandise = (good: Goods | null): string => {
-  const record = good as unknown as Record<string, unknown> | null;
-  for (const cle of ["name", "goodsName", "nom", "designation", "label", "libelle"]) {
-    const valeur = record?.[cle];
-    if (typeof valeur === "string" && valeur.trim()) return valeur.trim();
-  }
-  return "cette marchandise";
-};
-
 const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, currentGoods }) => {
   const [cReservation, setCReservation] = useState<Reservation>(currentReservation);
   const [stateGoods, setStateGoods] = useState<Goods[]>(currentGoods);
   const [idGoodsDeleted, setIdGoodsDeleted] = useState<string[]>([]);
   // Marchandise en attente de confirmation de suppression
   const [aSupprimer, setASupprimer] = useState<Goods | null>(null);
-  const [enCours, setEnCours] = useState(false);
-  const [erreur, setErreur] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
     setStateGoods(currentGoods);
@@ -81,78 +53,113 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
     setCReservation((prev) => ({ ...prev, amountPaid: prev.totalPrice, amountToPay: 0, paymentStatus: true }));
   };
 
+  /**
+   * Enregistrement SÉQUENTIEL : chaque étape est vérifiée, et le message indique l'étape en échec.
+   * 1) suppression des marchandises retirées (vrai appel DELETE)
+   * 2) mise à jour des marchandises modifiées
+   * 3) mise à jour de la réservation (totaux recalculés)
+   * 4) mouvement de caisse (mis à jour, ou créé s'il n'existe pas encore et qu'un montant est payé)
+   * Le store local n'est modifié qu'une fois le serveur à jour.
+   */
   const onUpdate = async () => {
-    if (enCours) return;
-    setErreur("");
-
-    // 1. Suppression dans la base AVANT de toucher au store :
-    //    si le serveur refuse, rien ne change à l'écran et l'erreur est affichée.
-    try {
-      setEnCours(true);
-      for (const idGoods of idGoodsDeleted) {
-        await supprimerDansBase(`/goods/${idGoods}`);
-      }
-      // Dernière marchandise supprimée : on supprime aussi la réservation vide (et non plus seulement la cacher)
-      if (stateGoods.length === 0 && idGoodsDeleted.length > 0) {
-        await supprimerDansBase(`/reservations/${currentReservation.id}`);
-      }
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : "Erreur lors de la suppression.");
-      setEnCours(false);
+    if (isSaving) return;
+    if (stateGoods.length === 0 && idGoodsDeleted.length === 0) {
+      toast.error("Aucune donnée à mettre à jour.");
       return;
     }
 
-    // 2. Mise à jour du store Redux (comme avant)
-    for (const currentGood of stateGoods) {
-      dispatch(upDateGood(currentGood));
-    }
-    for (const idGoods of idGoodsDeleted) {
-      dispatch(deletGoods(idGoods));
-    }
+    setIsSaving(true);
+    try {
+      // 1) Suppressions
+      for (const id of idGoodsDeleted) {
+        const result = await onDeleteService(TABLE_DATA_BASE.GOODS, id);
+        if (result !== "success") {
+          toast.error("Échec de la suppression d'une marchandise.");
+          return;
+        }
+      }
 
-    // Totaux recalculés à partir des marchandises restantes (quantité, poids, prix)
-    const total = stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0);
-    const quantite = stateGoods.reduce((acc, g) => acc + Number(g.quantity), 0);
-    const poids = stateGoods.reduce((acc, g) => acc + Number(g.totalWeight), 0);
-    const reservationBase: Reservation = {
-      ...cReservation,
-      totalPrice: total,
-      amountToPay: Math.max(total - cReservation.amountPaid, 0),
-      ...({ quantity: quantite, weight: poids } as unknown as Partial<Reservation>),
-    };
-    const currentCashMouvement = cashMouvement.find(({ id }) => cReservation.idCashMovement === id);
-    if (currentCashMouvement) {
-      const cashMouvementMaj: CashMovement = {
-        ...currentCashMouvement,
-        credit: cReservation.amountPaid,
-        userId: currentUser ? currentUser.id : "",
-        date: new Date().toISOString(),
+      // 2) Marchandises modifiées seulement
+      const modifiees = stateGoods.filter((good) => {
+        const origine = currentGoods.find(({ id }) => id === good.id);
+        return JSON.stringify(good) !== JSON.stringify(origine);
+      });
+      for (const good of modifiees) {
+        const result = await onUpdateService(TABLE_DATA_BASE.GOODS, good);
+        if (result !== "success") {
+          toast.error("Échec de la mise à jour d'une marchandise.");
+          return;
+        }
+      }
+
+      // 3) Réservation : totaux recalculés d'après les marchandises restantes
+      const totalPrice = stateGoods.reduce((acc, g) => acc + Number(g.totalPrice), 0);
+      const quantity = stateGoods.reduce((acc, g) => acc + Number(g.quantity), 0);
+      const weight = stateGoods.reduce((acc, g) => acc + Number(g.totalWeight), 0);
+      const updatedReservation: Reservation = {
+        ...cReservation,
+        totalPrice,
+        quantity,
+        weight,
+        amountToPay: Math.max(totalPrice - cReservation.amountPaid, 0),
+        paymentStatus: totalPrice > 0 && cReservation.amountPaid >= totalPrice,
       };
-      const reservation: Reservation = reservationBase;
-      dispatch(setCashMouvement(cashMouvementMaj));
-      dispatch(setReservation(reservation));
+
+      // 4) Caisse
+      const existant = cashMouvement.find(({ id }) => cReservation.idCashMovement === id);
+      let mouvement: CashMovement | null = null;
+      if (existant) {
+        mouvement = {
+          ...existant,
+          credit: cReservation.amountPaid,
+          userId: currentUser ? currentUser.id : "",
+          date: new Date().toISOString(),
+        };
+        const result = await onUpdateService(TABLE_DATA_BASE.CASHMOVEMENT, mouvement);
+        if (result !== "success") {
+          toast.error("Échec de la mise à jour du paiement (caisse).");
+          return;
+        }
+      } else if (cReservation.amountPaid > 0) {
+        // Pas encore de mouvement en base : on le CRÉE (et non « update »)
+        mouvement = {
+          id: cReservation.idCashMovement || uuid(),
+          credit: cReservation.amountPaid,
+          userId: currentUser ? currentUser.id : "",
+          date: new Date().toISOString(),
+          tripId: cReservation.tripId,
+          designation: `Paiement du client ${cReservation.clientName}`,
+          type: "credit",
+          debit: 0,
+        };
+        const result = await onAddService(TABLE_DATA_BASE.CASHMOVEMENT, mouvement);
+        if (result !== "success") {
+          toast.error("Échec de l'enregistrement du paiement (caisse).");
+          return;
+        }
+        updatedReservation.idCashMovement = mouvement.id;
+      }
+
+      const reservationResult = await onUpdateService(TABLE_DATA_BASE.RESERVATION, updatedReservation);
+      if (reservationResult !== "success") {
+        toast.error("Échec de la mise à jour de la réservation.");
+        return;
+      }
+
+      // Tout est enregistré : mise à jour du store local
+      modifiees.forEach((good) => dispatch(upDateGood(good)));
+      idGoodsDeleted.forEach((id) => dispatch(deletGoods(id)));
+      dispatch(setReservation(updatedReservation));
+      if (mouvement) dispatch(setCashMouvement(mouvement));
+
+      toast.success("Mise à jour réussie !");
+      onClose();
+    } catch (error) {
+      console.error(error);
+      toast.error("Une erreur est survenue lors de la mise à jour.");
+    } finally {
+      setIsSaving(false);
     }
-    // s'il n'a pas encore payé
-    else {
-      const cashMouvementNouveau: CashMovement = {
-        id: uuid(),
-        credit: cReservation.amountPaid,
-        userId: currentUser ? currentUser.id : "",
-        date: new Date().toISOString(),
-        tripId: cReservation.tripId,
-        designation: `Paiement du client ${cReservation.clientName}`,
-        type: "credit",
-        debit: 0,
-      };
-      const reservation: Reservation = {
-        ...reservationBase,
-        idCashMovement: cashMouvementNouveau.id,
-      };
-      dispatch(setReservation(reservation));
-      dispatch(setCashMouvement(cashMouvementNouveau));
-    }
-    setEnCours(false);
-    onClose();
   };
 
   const handleUpdateGood = (updatedGood: Goods) => {
@@ -176,7 +183,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
     if (good) setASupprimer(good);
   };
 
-  // Confirmation : la marchandise disparaît de la liste (enregistré au clic sur « Confirmer la modification »)
+  // « Oui » : la marchandise disparaît de la liste ; elle sera supprimée du serveur à « Confirmer la modification »
   const confirmerSuppression = () => {
     if (!aSupprimer) return;
     const idGoods = aSupprimer.id;
@@ -185,7 +192,7 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
     setASupprimer(null);
   };
 
-  // Remet les marchandises supprimées (avant l'enregistrement)
+  // Remet les marchandises retirées (avant l'enregistrement)
   const annulerSuppressions = () => {
     setStateGoods((prev) => [...prev, ...currentGoods.filter(({ id }) => idGoodsDeleted.includes(id))]);
     setIdGoodsDeleted([]);
@@ -200,17 +207,36 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
     }));
   }, [stateGoods]);
 
+  const nomASupprimer = (() => {
+    const record = aSupprimer as unknown as Record<string, unknown> | null;
+    for (const cle of ["itemName", "name", "goodsName", "designation"]) {
+      const valeur = record?.[cle];
+      if (typeof valeur === "string" && valeur.trim()) return valeur.trim();
+    }
+    return "cette marchandise";
+  })();
+
+  const messageSuppression =
+    `Voulez-vous vraiment supprimer « ${nomASupprimer} » de la réservation de ${currentReservation.clientName} ?` +
+    (stateGoods.length === 1
+      ? " C'est la dernière marchandise : la réservation disparaîtra de la liste." +
+        (cReservation.amountPaid > 0
+          ? ` Le paiement de ${formatCurrency(cReservation.amountPaid)} reste enregistré en caisse.`
+          : "")
+      : "") +
+    " La suppression est enregistrée quand vous cliquez sur « Confirmer la modification ».";
+
   return (
     <div className="flex fixed items-center justify-center inset-0 flex-col p-2.5 z-50">
-      <div className="fixed inset-0 bg-black/50" onClick={enCours ? undefined : onClose}></div>
+      <div className="fixed inset-0 bg-black/50" onClick={onClose}></div>
       <div className="z-50 w-[80%] space-y-6 overflow-auto bg-white p-6 rounded-lg max-h-[90vh]">
         {idGoodsDeleted.length > 0 && (
           <div className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-orange-200 bg-orange-50 px-4 py-2 text-sm text-orange-800">
             <span>
-              {idGoodsDeleted.length} marchandise(s) supprimée(s). Cliquez sur « Confirmer la modification » pour
+              {idGoodsDeleted.length} marchandise(s) à supprimer. Cliquez sur « Confirmer la modification » pour
               enregistrer.
             </span>
-            <Button size="sm" variant="outline" onClick={annulerSuppressions} disabled={enCours}>
+            <Button size="sm" variant="outline" onClick={annulerSuppressions}>
               Annuler la suppression
             </Button>
           </div>
@@ -313,13 +339,9 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
             </Card>
           </div>
 
-          {erreur && (
-            <p className="rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm text-red-700">{erreur}</p>
-          )}
-
           {/* Confirmer */}
-          <Button className="px-6 py-6 text-lg" onClick={onUpdate} disabled={enCours}>
-            {enCours ? "Enregistrement..." : "Confirmer la modification"}
+          <Button className="px-6 py-6 text-lg" onClick={onUpdate} disabled={isSaving}>
+            {isSaving ? "Enregistrement..." : "Confirmer la modification"}
           </Button>
         </div>
       </div>
@@ -327,13 +349,9 @@ const UpdateGood: FC<ReservationFormProps> = ({ onClose, currentReservation, cur
       <ConfirmDialog
         open={aSupprimer !== null}
         title="Supprimer la marchandise"
-        message={`Voulez-vous vraiment supprimer « ${libelleMarchandise(aSupprimer)} » de la réservation de ${
-          currentReservation.clientName
-        } ?${
-          stateGoods.length === 1
-            ? " C'est la dernière marchandise : la réservation sera supprimée."
-            : ""
-        } La suppression sera enregistrée quand vous cliquerez sur « Confirmer la modification ».`}
+        message={messageSuppression}
+        confirmLabel="Oui, supprimer"
+        cancelLabel="Non"
         onCancel={() => setASupprimer(null)}
         onConfirm={confirmerSuppression}
       />

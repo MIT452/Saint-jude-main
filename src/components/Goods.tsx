@@ -1,1049 +1,824 @@
-import { useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import { useState, useEffect, Fragment, FC, ReactNode } from "react";
+import { Card, CardContent } from "./ui/card";
+import { Button } from "./ui/button";
+import { Label } from "./ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import {
-  BarChart3,
-  Bot,
-  CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  CreditCard,
-  Download,
-  Eye,
-  Filter,
-  Layers,
-  Package,
-  Plus,
-  Search,
-  Ship,
-  Truck,
-  X,
-  XCircle,
-  type LucideIcon,
-} from 'lucide-react';
-import { useDispatch, useSelector } from 'react-redux';
-import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
-import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
-import { Badge } from './ui/badge';
-import { RootState } from '../redux';
-import { findBoat, findTrip, formatCityName, formatCurrency } from '../Tools/Tools';
-import GoodsIcon from './GoodsIcon';
-import ReservationForm from './GoodsForm';
+  CheckCircle, XCircle, PlusCircle, Package, MapPin, Calendar, Hash, Scale, Banknote,
+  Ship, Zap, Wallet, CreditCard, Tag, User, ArrowRight, AlertTriangle, Phone,
+  Eye, Pencil, Trash2, Mail, StickyNote, Barcode,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { InputField } from "./tools/InputField";
+import { CashMovement, Goods, Reservation, ReservationFormData, TABLE_DATA_BASE } from "../data/type";
+import { useDispatch, useSelector } from "react-redux";
+import { RootState } from "../redux";
 import { v4 as uuid } from 'uuid';
-import ModalUpdateGood from './GoodsModalUpdate';
-import { CashMovement, Goods, Reservation } from '../data/type';
-import { setCashMouvement, setReservation } from '../redux/feature/stJude';
-import { reservationVoid } from '../data/dataVoid';
+import { setCashMouvement, setGoods, setReservation } from "../redux/feature/stJude";
+import QrCode from "./tools/QrCode";
+import { toast } from "react-toastify";
+import { Input } from "./ui/input";
+import { cashMouvementVoid, formeReservationVoid, reservationVoid } from "../data/dataVoid";
+import { findBoat, findTrip } from "../Tools/Tools";
+import { inputFields } from "./goodsForms";
+import { onAddService } from "../data/service";
+import ConfirmDialog from "./ConfirmDialog";
+import GoodsIcon from "./GoodsIcon";
+import { nettoyerTelephone, validerMarchandise, validerTelephone } from "../utils/validation";
 
-/* =========================
-   Statut de la réservation (valeurs de la base, en français)
-   EN_ATTENTE, CONFIRMEE, REFUSEE, ANNULEE, NO_SHOW, TERMINEE
-========================= */
-type StatutReservation = 'EN_ATTENTE' | 'CONFIRMEE' | 'REFUSEE' | 'ANNULEE' | 'NO_SHOW' | 'TERMINEE';
-
-const normaliserStatut = (brut?: string): StatutReservation => {
-  const valeur = (brut ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toUpperCase();
-  if (valeur.includes('NO_SHOW')) return 'NO_SHOW';
-  if (valeur.includes('REFUS')) return 'REFUSEE';
-  if (valeur.includes('ANNUL')) return 'ANNULEE';
-  if (valeur.includes('TERMIN')) return 'TERMINEE';
-  if (valeur.includes('CONFIRM')) return 'CONFIRMEE';
-  return 'EN_ATTENTE';
-};
-
-/* =========================
-   Statut du paiement : Crédit / Partiellement payé / Payé
-   Règles (calculées à partir des montants) :
-   1. Réservation annulée par le client → pas de statut de paiement
-   2. Montant payé = 0 Ar                → « Crédit »
-   3. Montant payé < montant total       → « Partiellement payé »
-   4. Montant payé >= montant total      → « Payé »
-========================= */
-type EtatPaiement = 'CREDIT' | 'PARTIEL' | 'PAYE';
-
-const getEtatPaiement = (reservation: Reservation): EtatPaiement | null => {
-  if (normaliserStatut(reservation.status as string | undefined) === 'ANNULEE') return null;
-
-  const total = Number(reservation.totalPrice) || 0;
-  const paye = Number(reservation.amountPaid) || 0;
-
-  if (paye === 0) return 'CREDIT';
-  if (paye < total) return 'PARTIEL';
-  return 'PAYE';
-};
-
-/* =========================
-   Statut affiché dans le tableau (affichage uniquement, la base n'est pas modifiée) :
-   - Annulée / Refusée / Absent / Terminée → gardent leur statut
-   - Crédit (0 Ar payé)   → « En attente »
-   - Partiellement payé   → « Partiellement payé » (+ bouton « Ajouter paiement »)
-   - Payé                 → « Confirmée »
-========================= */
-type StatutLigne = { cle: StatutReservation; libelle: string; classe: string; Icon: LucideIcon };
-
-const statutsFixes: Record<Exclude<StatutReservation, 'EN_ATTENTE' | 'CONFIRMEE'>, StatutLigne> = {
-  REFUSEE: { cle: 'REFUSEE', libelle: 'Refusée', classe: 'bg-red-100 text-red-700', Icon: XCircle },
-  ANNULEE: { cle: 'ANNULEE', libelle: 'Annulée', classe: 'bg-red-100 text-red-700', Icon: XCircle },
-  NO_SHOW: { cle: 'NO_SHOW', libelle: 'Absent', classe: 'bg-gray-200 text-gray-800', Icon: XCircle },
-  TERMINEE: { cle: 'TERMINEE', libelle: 'Livrée', classe: 'bg-blue-100 text-blue-700', Icon: CheckCircle2 },
-};
-
-const getStatutLigne = (reservation: Reservation): StatutLigne => {
-  const brut = normaliserStatut(reservation.status as string | undefined);
-  if (brut !== 'EN_ATTENTE' && brut !== 'CONFIRMEE') return statutsFixes[brut];
-
-  const etat = getEtatPaiement(reservation);
-  if (etat === 'PAYE')
-    return { cle: 'CONFIRMEE', libelle: 'Confirmée', classe: 'bg-green-100 text-green-700', Icon: CheckCircle2 };
-  if (etat === 'PARTIEL')
-    return {
-      cle: 'EN_ATTENTE',
-      libelle: 'Partiellement payé',
-      classe: 'bg-orange-100 text-orange-700',
-      Icon: CreditCard,
-    };
-  return { cle: 'EN_ATTENTE', libelle: 'En attente', classe: 'bg-red-50 text-red-600', Icon: Clock };
-};
-
-/* =========================
-   Filtres (statut / paiement)
-========================= */
-type Filtre = 'all' | 'credit' | 'partial' | 'paid' | 'delivered' | 'cancelled';
-
-const correspondAuFiltre = (reservation: Reservation, filtre: Filtre): boolean => {
-  if (filtre === 'all') return true;
-  const statut = normaliserStatut(reservation.status as string | undefined);
-  const etat = getEtatPaiement(reservation);
-  switch (filtre) {
-    case 'cancelled':
-      return statut === 'ANNULEE';
-    case 'delivered':
-      return statut === 'TERMINEE';
-    case 'paid':
-      return etat === 'PAYE';
-    case 'partial':
-      return etat === 'PARTIEL';
-    case 'credit':
-      return etat === 'CREDIT';
-    default:
-      return true;
-  }
-};
-
-const filtresRapides: { cle: Exclude<Filtre, 'all'>; libelle: string; Icon: LucideIcon; couleur: string }[] = [
-  { cle: 'credit', libelle: 'En attente', Icon: Clock, couleur: 'text-red-500' },
-  { cle: 'paid', libelle: 'Confirmée', Icon: CheckCircle2, couleur: 'text-green-600' },
-  { cle: 'partial', libelle: 'Partiellement payé', Icon: CreditCard, couleur: 'text-orange-500' },
-  { cle: 'delivered', libelle: 'Livrée', Icon: Truck, couleur: 'text-purple-600' },
-];
-
-/* =========================
-   Utilitaires
-========================= */
-const normaliserTexte = (valeur?: string) =>
-  (valeur ?? '')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase();
-
-// Cherche un texte dans un objet : d'abord les clés connues, puis toute clé qui correspond au motif
-const trouverTexte = (source: unknown, cles: string[], motif: RegExp, exclure?: RegExp): string => {
-  const record = source as Record<string, unknown> | undefined;
-  if (!record) return '';
-  for (const cle of cles) {
-    const valeur = record[cle];
-    if (typeof valeur === 'string' && valeur.trim()) return valeur.trim();
-  }
-  for (const [cle, valeur] of Object.entries(record)) {
-    if (typeof valeur === 'string' && valeur.trim() && motif.test(cle) && !(exclure && exclure.test(cle))) {
-      return valeur.trim();
-    }
-  }
-  return '';
-};
-
-const nomMarchandise = (item: Goods) =>
-  trouverTexte(
-    item,
-    ['itemName', 'name', 'goodsName', 'nom', 'designation', 'label', 'libelle', 'title', 'description', 'productName', 'item', 'type', 'goodsType'],
-    /name|nom|desig|label|libelle|title|descr|product|item|marchand|goods|type/i,
-    /id$|^id|reservation|user|client|trip|boat|created|updated|date|status/i
-  );
-
-// Photo du bateau (ajoutée depuis « Gestion de bateau »)
-const photoBateau = (bateau: unknown) =>
-  trouverTexte(bateau, ['image', 'photo', 'imageUrl', 'picture', 'img'], /image|photo|picture|img/i);
-
-const exporterCsv = (lignes: string[][]) => {
-  const echapper = (valeur: string) => `"${valeur.replace(/"/g, '""')}"`;
-  const contenu = '\ufeff' + lignes.map((ligne) => ligne.map(echapper).join(';')).join('\n');
-  const url = URL.createObjectURL(new Blob([contenu], { type: 'text/csv;charset=utf-8;' }));
-  const lien = document.createElement('a');
-  lien.href = url;
-  lien.download = 'marchandises.csv';
-  lien.click();
-  URL.revokeObjectURL(url);
-};
-
-const PAGE_SIZE = 8;
-
-/* =========================
-   Fenêtre « Ajouter paiement »
-========================= */
-type PaiementModalProps = {
-  reservation: Reservation;
+interface ReservationFormProps {
   onClose: () => void;
-};
-
-const PaiementModal = ({ reservation, onClose }: PaiementModalProps) => {
-  const [montant, setMontant] = useState('');
-  const [erreur, setErreur] = useState('');
-  const [enCours, setEnCours] = useState(false);
-
-  const dispatch = useDispatch();
-  const cashMouvement = useSelector((state: RootState) => state.stJude.cashMouvement);
-  const currentUser = useSelector((state: RootState) => state.users.currentUser);
-
-  const total = Number(reservation.totalPrice) || 0;
-  const paye = Number(reservation.amountPaid) || 0;
-  const reste = Math.max(total - paye, 0);
-
-  // Enregistre le paiement dans le store (même logique que « Confirmer la modification » de la fenêtre de détail) :
-  // - la réservation garde son userId (caissier d'origine)
-  // - le mouvement de caisse est mis à jour, ou créé s'il n'existe pas encore
-  const enregistrerPaiement = (montantAjoute: number) => {
-    const nouveauPaye = paye + montantAjoute;
-    const nouveauReste = Math.max(total - nouveauPaye, 0);
-    const reservationMaj: Reservation = {
-      ...reservation,
-      amountPaid: nouveauPaye,
-      amountToPay: nouveauReste,
-      paymentStatus: nouveauPaye >= total,
-    };
-    const existant = cashMouvement.find(({ id }) => id === reservation.idCashMovement);
-
-    if (existant) {
-      const mouvement: CashMovement = {
-        ...existant,
-        credit: nouveauPaye,
-        userId: currentUser ? currentUser.id : '',
-        date: new Date().toISOString(),
-      };
-      dispatch(setCashMouvement(mouvement));
-      dispatch(setReservation(reservationMaj));
-    } else {
-      const mouvement: CashMovement = {
-        id: uuid(),
-        credit: nouveauPaye,
-        userId: currentUser ? currentUser.id : '',
-        date: new Date().toISOString(),
-        tripId: reservation.tripId,
-        designation: `Paiement du client ${reservation.clientName}`,
-        type: 'credit',
-        debit: 0,
-      };
-      dispatch(setReservation({ ...reservationMaj, idCashMovement: mouvement.id }));
-      dispatch(setCashMouvement(mouvement));
-    }
-  };
-
-  const valider = async () => {
-    const valeur = Number(montant);
-    if (!valeur || valeur <= 0) {
-      setErreur('Entrez un montant supérieur à 0.');
-      return;
-    }
-    if (valeur > reste) {
-      setErreur(`Le montant dépasse le reste à payer (${formatCurrency(reste)}).`);
-      return;
-    }
-    try {
-      setEnCours(true);
-      setErreur('');
-      enregistrerPaiement(valeur);
-      onClose();
-    } catch (e) {
-      setErreur(e instanceof Error ? e.message : "Erreur lors de l'enregistrement du paiement.");
-    } finally {
-      setEnCours(false);
-    }
-  };
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={onClose}>
-      <Card className="w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-        <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-[#001F3F]">Ajouter paiement</CardTitle>
-          <Button variant="ghost" size="sm" onClick={onClose}>
-            <X className="h-4 w-4" />
-          </Button>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <div className="text-sm space-y-1">
-            <p>
-              <span className="text-gray-500">Expéditeur :</span> {reservation.clientName}
-            </p>
-            <p>
-              <span className="text-gray-500">Prix total :</span> {formatCurrency(total)}
-            </p>
-            <p>
-              <span className="text-gray-500">Déjà payé :</span> {formatCurrency(paye)}
-            </p>
-            <p className="font-medium">
-              <span className="text-gray-500 font-normal">Reste à payer :</span> {formatCurrency(reste)}
-            </p>
-          </div>
-
-          <div>
-            <label className="text-sm text-gray-600 mb-1 block">Montant du paiement (Ar)</label>
-            <Input
-              type="number"
-              min={1}
-              max={reste}
-              value={montant}
-              onChange={(e) => setMontant(e.target.value)}
-              placeholder={`Maximum ${reste}`}
-            />
-          </div>
-
-          {erreur && <p className="text-sm text-red-600">{erreur}</p>}
-
-          <div className="flex justify-end gap-2">
-            <Button variant="outline" onClick={onClose} disabled={enCours}>
-              Annuler
-            </Button>
-            <Button onClick={valider} disabled={enCours}>
-              {enCours ? 'Enregistrement...' : 'Valider le paiement'}
-            </Button>
-          </div>
-        </CardContent>
-      </Card>
-    </div>
-  );
-};
-
-/* =========================
-   Carte de statistique (bandeau du haut)
-========================= */
-const TONS = {
-  blue: { boite: 'bg-blue-50 border-blue-100', cercle: 'bg-blue-700', titre: 'text-blue-800', barre: 'bg-blue-600' },
-  green: { boite: 'bg-green-50 border-green-100', cercle: 'bg-green-600', titre: 'text-green-700', barre: 'bg-green-600' },
-  orange: { boite: 'bg-orange-50 border-orange-100', cercle: 'bg-orange-400', titre: 'text-orange-600', barre: 'bg-orange-400' },
-  red: { boite: 'bg-red-50 border-red-100', cercle: 'bg-red-500', titre: 'text-red-600', barre: 'bg-red-500' },
-  purple: { boite: 'bg-purple-50 border-purple-100', cercle: 'bg-purple-600', titre: 'text-purple-700', barre: 'bg-purple-500' },
-} as const;
-
-const formatPourcent = (valeur: number) => `${valeur.toFixed(1).replace('.', ',')}%`;
-
-function CarteStat({
-  ton,
-  icone,
-  titre,
-  valeur,
-  pourcent,
-  pied,
-}: {
-  ton: keyof typeof TONS;
-  icone: ReactNode;
-  titre: string;
-  valeur: number;
-  pourcent?: number;
-  pied?: ReactNode;
-}) {
-  const couleurs = TONS[ton];
-  return (
-    <div className={`rounded-xl border p-3 shadow-sm ${couleurs.boite}`}>
-      <div className="flex items-center gap-3">
-        <span className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full text-white ${couleurs.cercle}`}>
-          {icone}
-        </span>
-        <div className="min-w-0">
-          <p className={`text-sm font-medium leading-tight ${couleurs.titre}`}>{titre}</p>
-          <p className="text-3xl font-bold leading-tight text-blue-950">{valeur}</p>
-        </div>
-      </div>
-      {pourcent !== undefined && (
-        <div className="mt-2 flex items-center gap-2">
-          <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-white/80">
-            <div className={`h-full rounded-full ${couleurs.barre}`} style={{ width: `${Math.min(pourcent, 100)}%` }} />
-          </div>
-          <span className={`text-xs ${couleurs.titre}`}>{formatPourcent(pourcent)}</span>
-        </div>
-      )}
-      {pied && <div className="mt-2">{pied}</div>}
-    </div>
-  );
+  idReservation: string
 }
 
-/* =========================
-   Page
-========================= */
-type MarchandisePageProps = {
-  // Optionnel : ouvre l'assistant IA (ex. navigation vers « Réservations multimodales »)
-  onOpenAssistant?: () => void;
+// Moyens de paiement proposés
+type MoyenPaiement = "banque" | "mvola" | "caisse";
+const MOYENS_PAIEMENT: Record<MoyenPaiement, string> = {
+  banque: "Banque",
+  mvola: "MVola",
+  caisse: "Caisse",
 };
 
-const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) => {
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<Filtre>('all');
-  const [showFilters, setShowFilters] = useState(false);
-  const [page, setPage] = useState(1);
-  const [selection, setSelection] = useState<string[]>([]);
-  const [showAddGoodsModal, setShowAddGoodsModal] = useState(false);
-  const [idReservation, setIdReservation] = useState<string>('');
-  const [showDetailGoodsModal, setShowDetailGoodsModal] = useState(false);
+// Icône affichée à côté de chaque champ dynamique (inputFields). Icône par défaut : Package
+const ICONES_CHAMPS: Record<string, LucideIcon> = {
+  goods: Package,
+  dateOfGoodsEntry: Calendar,
+  quantity: Hash,
+  unitWeight: Scale,
+  unitPrice: Banknote,
+};
+
+type ChampTelephone = "senderPhone" | "recipientPhone";
+const MESSAGE_TELEPHONE_INVALIDE = "Numéro de téléphone invalide : 10 chiffres exactement, sans lettres.";
+
+/* =========================
+   Petits composants de présentation (aucune logique métier)
+========================= */
+const SectionTitle: FC<{ icon: LucideIcon; title: string; subtitle?: string; color?: string }> = ({
+  icon: Icon, title, subtitle, color = "bg-primary",
+}) => (
+  <div className="flex items-center gap-3 mb-4">
+    <div className={`h-11 w-11 rounded-full ${color} text-white flex items-center justify-center shrink-0`}>
+      <Icon className="h-5 w-5" />
+    </div>
+    <div>
+      <h3 className="text-lg font-semibold text-[#001F3F] leading-tight">{title}</h3>
+      {subtitle && <p className="text-sm text-muted-foreground">{subtitle}</p>}
+    </div>
+  </div>
+);
+
+const FieldBox: FC<{ icon: LucideIcon; children: ReactNode }> = ({ icon: Icon, children }) => (
+  <div className="flex items-start gap-3 rounded-xl border bg-slate-50/70 p-3">
+    <div className="h-10 w-10 rounded-full bg-white border text-primary flex items-center justify-center shrink-0 mt-1">
+      <Icon className="h-5 w-5" />
+    </div>
+    <div className="flex-1 min-w-0">{children}</div>
+  </div>
+);
+
+const StatBox: FC<{ icon: LucideIcon; label: string; value: string; tone?: "blue" | "red" | "green" }> = ({
+  icon: Icon, label, value, tone = "blue",
+}) => {
+  const tones = {
+    blue: "bg-blue-50 text-primary",
+    red: "bg-red-50 text-red-600",
+    green: "bg-green-50 text-green-700",
+  };
+  return (
+    <div className={`flex items-center gap-3 rounded-xl p-4 ${tones[tone]}`}>
+      <div className="h-12 w-12 rounded-xl bg-white/80 flex items-center justify-center shrink-0">
+        <Icon className="h-6 w-6" />
+      </div>
+      <div>
+        <div className="text-sm text-gray-600">{label}</div>
+        <div className="text-2xl font-bold leading-tight">{value}</div>
+      </div>
+    </div>
+  );
+};
+
+const LigneInfo: FC<{ icon: LucideIcon; label: string; value: ReactNode; danger?: boolean }> = ({
+  icon: Icon, label, value, danger,
+}) => (
+  <div className={`flex items-center justify-between gap-2 rounded-lg px-3 py-2 ${danger ? "bg-red-50 text-red-600" : "bg-slate-50"}`}>
+    <span className="flex items-center gap-2 text-sm">
+      <Icon className="h-4 w-4" />
+      {label}
+    </span>
+    <span className="font-semibold">{value}</span>
+  </div>
+);
+
+const ReservationForm: FC<ReservationFormProps> = ({ onClose, idReservation }) => {
   const [currentGoods, setCurrentGoods] = useState<Goods[]>([]);
-  const [currentReservation, setCurrentReservation] = useState<Reservation>(reservationVoid);
-  const [reservationPaiement, setReservationPaiement] = useState<Reservation | null>(null);
+  const [priceTotal, setPrice] = useState<number>(0);
+  const [lotNumber, setLotNumber] = useState("");
+  const [errors, setErrors] = useState<{ [key: string]: string }>({});
+  const [currenReservation, setCurrentReservation] = useState<Reservation>(reservationVoid);
+  const [cashMouvement, setCashMouvements] = useState<CashMovement>(cashMouvementVoid);
+  const [formData, setFormData] = useState<ReservationFormData>(formeReservationVoid);
+  const [idBoatSelected, setIdBoat] = useState<string>('');
+  const [weightTrip, setWeightTrip] = useState<number>(0);
+  // Mode de calcul du prix : automatique (quantité x prix unitaire) ou saisie manuelle du prix total
+  const [priceMode, setPriceMode] = useState<"auto" | "manual">("auto");
+  // Moyen de paiement : Banque, MVola ou Caisse
+  const [paymentMethod, setPaymentMethod] = useState<MoyenPaiement>("caisse");
+  // Marchandise en attente de confirmation de suppression
+  const [goodToDeleteId, setGoodToDeleteId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
+  // E-mail et notes du client (affichage / saisie uniquement : pas de champ correspondant dans ReservationFormData)
+  const [clientEmail, setClientEmail] = useState("");
+  const [clientNotes, setClientNotes] = useState("");
+  // Marchandise dont on affiche le détail (icône œil)
+  const [viewedGoodId, setViewedGoodId] = useState<string | null>(null);
 
-  const { allUser, currentUser } = useSelector((state: RootState) => state.users);
-  const { reservation: allReservation, boat: allBoat } = useSelector((state: RootState) => state.stJude);
-  const allGoods = useSelector((state: RootState) => state.stJude.goods);
-  const alltrip = useSelector((state: RootState) => state.stJude.trip);
+  const [idCashMouvement] = useState(() => uuid());
+  const { trip: trips, boat: allBoat, goods: allGoods } = useSelector((state: RootState) => state.stJude);
+  const currentUser = useSelector((state: RootState) => state.users.currentUser);
+  const dispatch = useDispatch();
 
-  // Nom du caissier :
-  // - userId vide                      → "Non attribué"
-  // - userId introuvable dans la liste → "Inconnu"
-  const getNomCaissier = (userId?: string) => {
-    const id = String(userId ?? '').trim();
-    if (!id) return 'Non attribué';
+  const now = new Date();
+  const futureTrips = trips.filter((trip) => new Date(trip.depart) > now);
 
-    const user =
-      allUser.find((candidat) => String(candidat.id).trim() === id) ??
-      (currentUser && String(currentUser.id).trim() === id ? currentUser : undefined);
+  const handleInput = (field: keyof ReservationFormData, value: string | number) => {
+    setFormData((prev) => ({ ...prev, [field]: value }));
+    setErrors((prev) => ({ ...prev, [field]: "" }));
+  }
 
-    const nom = user ? `${user.name ?? ''} ${user.lastName ?? ''}`.trim() : '';
-    return nom || 'Inconnu';
-  };
+  // Téléphone : les lettres sont refusées en direct, la saisie est limitée à 10 chiffres
+  const handlePhone = (field: ChampTelephone, value: string | number) => {
+    const nettoye = nettoyerTelephone(value);
+    const chiffres = nettoye.replace(/\D/g, "");
+    let erreur = "";
+    if (nettoye !== chiffres) erreur = "Chiffres uniquement : les lettres ne sont pas valides.";
+    else if (chiffres.length > 10) erreur = "Le numéro ne doit pas dépasser 10 chiffres.";
+    if (erreur) toast.error(erreur, { toastId: `tel-${field}` });
+    setFormData((prev) => ({ ...prev, [field]: chiffres.slice(0, 10) }));
+    setErrors((prev) => ({ ...prev, [field]: erreur }));
+  }
 
-  // Réservations visibles selon le rôle (un Capitaine ne voit que celles de ses bateaux)
-  const reservationsVisibles = useMemo(() => {
-    // Réservations dont toutes les marchandises ont été supprimées (0 Ar, rien payé) : on ne les affiche plus
-    const idsAvecMarchandises = new Set(allGoods.map(({ reservationId }) => reservationId));
-    return allReservation.filter((reservation) => {
-        const vide =
-          !idsAvecMarchandises.has(reservation.id) &&
-          !(Number(reservation.totalPrice) > 0) &&
-          !(Number(reservation.amountPaid) > 0);
-        if (vide) return false;
-        if (currentUser && currentUser.role === 'Capitaine') {
-          const trip = findTrip(reservation.tripId, alltrip);
-          const boat = trip ? findBoat(trip.boatId, allBoat) : undefined;
-          if (!boat || !boat.crew.includes(currentUser.id)) return false;
-        }
-        return true;
-      });
-  }, [allReservation, allGoods, allBoat, alltrip, currentUser]);
+  // Contrôle des téléphones avant l'enregistrement final
+  // (les coordonnées peuvent être remplies après l'ajout des marchandises)
+  const validerTelephones = () => {
+    const erreurExpediteur = validerTelephone(formData.senderPhone);
+    const erreurDestinataire = validerTelephone(formData.recipientPhone);
+    if (!erreurExpediteur && !erreurDestinataire) return true;
+    setErrors((prev) => ({
+      ...prev,
+      ...(erreurExpediteur ? { senderPhone: erreurExpediteur } : {}),
+      ...(erreurDestinataire ? { recipientPhone: erreurDestinataire } : {}),
+    }));
+    toast.error(MESSAGE_TELEPHONE_INVALIDE);
+    return false;
+  }
 
-  const marchandisesVisibles = useMemo(() => {
-    const ids = new Set(reservationsVisibles.map((reservation) => reservation.id));
-    return allGoods.filter(({ reservationId }) => ids.has(reservationId));
-  }, [allGoods, reservationsVisibles]);
+  const calculateDerivedValues = () => {
+    const { quantity, unitWeight, unitPrice } = formData;
+    const totalWeight = quantity && unitWeight ? (quantity * unitWeight) : 0;
+    const totalPrice = quantity && unitPrice ? (quantity * unitPrice) : 0;
+    priceMode === "auto" ?
+      setFormData((prev) => ({ ...prev, totalWeight, totalPrice, amountToBePaidByClient: totalPrice })) :
+      setFormData((prev) => ({ ...prev, totalWeight, }));
+  }
+  const calculateUnitPrice = () => {
+    const { totalPrice, quantity } = formData;
+    const unitP = quantity && totalPrice / quantity;
 
-  const marchandisesParReservation = useMemo(() => {
-    const carte = new Map<string, Goods[]>();
-    marchandisesVisibles.forEach((item) => {
-      carte.set(item.reservationId, [...(carte.get(item.reservationId) ?? []), item]);
-    });
-    return carte;
-  }, [marchandisesVisibles]);
-
-  // Photo du premier bateau qui en possède une (bannière de droite)
-  const photoBanniere = useMemo(() => {
-    for (const bateau of allBoat) {
-      const photo = photoBateau(bateau);
-      if (photo) return photo;
+    setFormData((prev) => ({ ...prev, unitPrice: unitP }));
+  }
+  const totalWeightInTrip = () => {
+    let goodsInTrip = allGoods.filter(({ tripId }) => tripId === formData.tripId);
+    setWeightTrip(goodsInTrip.reduce((acc, { totalWeight }) => acc + Number(totalWeight), 0))
+  }
+  const payTotal = (total: number) => {
+    setFormData((prev) => ({ ...prev, amountPaidByClient: total, rest: 0, paymentStatus: true }));
+  }
+  const calculatePrice = () => {
+    let totalPrice = currentGoods.reduce((acc, { totalPrice }) => acc + Number(totalPrice), 0)
+    setPrice(totalPrice);
+  }
+  const setCashMouvementFct = () => {
+    let currentCashMouvement: CashMovement = {
+      ...cashMouvement,
+      credit: Number(formData.amountPaidByClient) || 0,
+      designation: `Paiement du client ${formData.senderName} (${MOYENS_PAIEMENT[paymentMethod]})`,
+      userId: currentUser?.id ? currentUser.id : "",
     }
-    return '';
-  }, [allBoat]);
+    setCashMouvements(currentCashMouvement)
+  }
+  const generateLotNumber = () => {
+    const prefix =
+      formData.cargoType === "fragile"
+        ? "FR"
+        : formData.cargoType === "agricole"
+          ? "AG"
+          : "GN"
+    const timestamp = Date.now().toString().slice(-6)
+    const random = Math.random().toString(36).substring(2, 4).toUpperCase()
+    setLotNumber(`${prefix}${timestamp}${random}`)
+  }
 
-  const filteredReservations = useMemo(() => {
-    const search = searchTerm.toLowerCase();
-    return reservationsVisibles.filter((reservation) => {
-      if (!correspondAuFiltre(reservation, statusFilter)) return false;
+  const validateForm = () => {
+    let newErrors: { [key: string]: string } = {}
 
-      const trip = findTrip(reservation.tripId, alltrip);
-      const noms = (marchandisesParReservation.get(reservation.id) ?? []).map(nomMarchandise).join(' ');
+    // Champs expéditeur/destinataire obligatoires
+    const requiredFields = [
+      "senderName",
+      "senderPhone",
+      "senderAddress",
+      "recipientName",
+      "recipientPhone",
+      "recipientAddress",
+      "cargoType",
+      ...inputFields.filter(f => f.required).map(f => f.key)
+    ]
 
-      return (
-        (reservation.clientName ?? '').toLowerCase().includes(search) ||
-        (reservation.destName ?? '').toLowerCase().includes(search) ||
-        (reservation.id ?? '').toLowerCase().includes(search) ||
-        noms.toLowerCase().includes(search) ||
-        getNomCaissier(reservation.userId).toLowerCase().includes(search) ||
-        (trip?.from ?? '').toLowerCase().includes(search) ||
-        (trip?.to ?? '').toLowerCase().includes(search)
-      );
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reservationsVisibles, statusFilter, searchTerm, alltrip, marchandisesParReservation, allUser, currentUser]);
+    requiredFields.forEach((field) => {
+      if (!formData[field as keyof typeof formData]) {
+        newErrors[field] = "Ce champ est requis"
+      }
+    })
 
-  /* ----- Statistiques (calculées sur les marchandises visibles) ----- */
-  const stats = useMemo(() => {
-    const statutDe = new Map(reservationsVisibles.map((r) => [r.id, getStatutLigne(r).cle]));
-    const total = marchandisesVisibles.length;
-    const compter = (cle: StatutReservation) =>
-      marchandisesVisibles.filter((item) => statutDe.get(item.reservationId) === cle).length;
-    const transit = compter('CONFIRMEE');
-    const attente = compter('EN_ATTENTE');
-    const livrees = compter('TERMINEE');
-    const pct = (valeur: number) => (total ? (valeur * 100) / total : 0);
+    // Une marchandise doit être transportable (« maison » seule est refusée)
+    const erreurMarchandise = validerMarchandise(String(formData.goods ?? ""))
+    if (erreurMarchandise) {
+      newErrors["goods"] = erreurMarchandise
+      toast.error(erreurMarchandise)
+    }
 
-    const parType = new Map<string, number>();
-    marchandisesVisibles.forEach((item) => {
-      const nom = nomMarchandise(item);
-      if (nom) parType.set(nom, (parType.get(nom) ?? 0) + 1);
-    });
-    const types = Array.from(parType.entries()).sort((a, b) => b[1] - a[1]);
+    // Téléphones : exactement 10 chiffres, sans lettres
+    for (const champ of ["senderPhone", "recipientPhone"] as const) {
+      const erreur = validerTelephone(formData[champ])
+      if (erreur) newErrors[champ] = erreur
+    }
+    if (newErrors.senderPhone || newErrors.recipientPhone) {
+      toast.error(MESSAGE_TELEPHONE_INVALIDE)
+    }
 
-    const valeurTotale = reservationsVisibles
-      .filter((r) => normaliserStatut(r.status as string | undefined) !== 'ANNULEE')
-      .reduce((somme, r) => somme + (Number(r.totalPrice) || 0), 0);
+    setErrors(newErrors)
+    return Object.keys(newErrors).length === 0
+  }
 
-    return {
-      total,
-      transit,
-      attente,
-      livrees,
-      transitPct: pct(transit),
-      attentePct: pct(attente),
-      livreesPct: pct(livrees),
-      types,
-      valeurTotale,
+  const onHadlSubmit = () => {
+    if (!validateForm()) return;
+
+    let goods: Goods = {
+      id: uuid(),
+      amountToPay: formData.amountToBePaidByClient,
+      embarkDate: formData.dateOfGoodsEntry,
+      itemName: formData.goods,
+      quantity: formData.quantity,
+      totalPrice: formData.totalPrice,
+      totalWeight: formData.totalWeight, types: formData.cargoType,
+      unitPrice: formData.unitPrice, unitWeight: formData.unitWeight,
+      userId: currentUser?.id ? currentUser.id : "",
+      reservationId: idReservation,
+      status: false,
+      state: "Prévu",
+      numberLot: '',
+      tripId: formData.tripId
     };
-  }, [marchandisesVisibles, reservationsVisibles]);
+    setCurrentGoods([...currentGoods, goods]);
+  }
 
-  const compteurFiltre = (filtre: Filtre) =>
-    reservationsVisibles.filter((reservation) => correspondAuFiltre(reservation, filtre)).length;
+  /**
+   * Enregistrement SÉQUENTIEL (et non plus en parallèle) :
+   * 1) paiement en caisse (si un montant est payé)
+   * 2) réservation
+   * 3) marchandises (qui dépendent de la réservation via reservationId)
+   * En cas d'échec, le message indique l'étape exacte.
+   */
+  const onAdd = async () => {
+    if (isSaving) return;
+    if (currentGoods.length === 0 || !currenReservation) {
+      toast.error("Aucune marchandise à ajouter ou réservation invalide.");
+      return;
+    }
 
-  /* ----- Pagination ----- */
-  const pageCount = Math.max(1, Math.ceil(filteredReservations.length / PAGE_SIZE));
-  const pageCourante = Math.min(page, pageCount);
-  const lignes = filteredReservations.slice((pageCourante - 1) * PAGE_SIZE, pageCourante * PAGE_SIZE);
-  const debut = filteredReservations.length === 0 ? 0 : (pageCourante - 1) * PAGE_SIZE + 1;
-  const fin = Math.min(pageCourante * PAGE_SIZE, filteredReservations.length);
+    // Les coordonnées peuvent avoir été saisies après l'ajout des marchandises : on revérifie
+    if (!validerTelephones()) return;
+    const marchandiseRefusee = currentGoods
+      .map((good) => validerMarchandise(String(good.itemName ?? "")))
+      .find(Boolean);
+    if (marchandiseRefusee) {
+      toast.error(marchandiseRefusee);
+      return;
+    }
 
-  const toutesSelectionnees = lignes.length > 0 && lignes.every((reservation) => selection.includes(reservation.id));
+    const paid = Number(formData.amountPaidByClient) || 0;
+    if (paid > priceTotal) {
+      toast.error("Le montant payé dépasse le prix total.");
+      return;
+    }
 
-  const basculerSelection = (id: string) =>
-    setSelection((courant) => (courant.includes(id) ? courant.filter((item) => item !== id) : [...courant, id]));
+    setIsSaving(true);
+    try {
+      const currentCashMouvement: CashMovement = {
+        ...cashMouvement,
+        id: idCashMouvement,
+        date: new Date().toISOString(),
+        tripId: currenReservation.tripId
+      };
 
-  const basculerPage = () =>
-    setSelection((courant) =>
-      toutesSelectionnees
-        ? courant.filter((id) => !lignes.some((reservation) => reservation.id === id))
-        : Array.from(new Set([...courant, ...lignes.map((reservation) => reservation.id)]))
-    );
+      // 1) Paiement
+      if (paid > 0) {
+        const cashResult = await onAddService(TABLE_DATA_BASE.CASHMOVEMENT, currentCashMouvement);
+        if (cashResult !== "success") {
+          toast.error("Échec de l'enregistrement du paiement (caisse).");
+          return;
+        }
+      }
 
-  const basculerFiltre = (filtre: Exclude<Filtre, 'all'>) => {
-    setStatusFilter((courant) => (courant === filtre ? 'all' : filtre));
-    setPage(1);
+      // 2) Réservation
+      const reservationResult = await onAddService(TABLE_DATA_BASE.RESERVATION, currenReservation);
+      if (reservationResult !== "success") {
+        toast.error("Échec de l'enregistrement de la réservation.");
+        return;
+      }
+
+      // 3) Marchandises (l'icône est calculée à l'affichage : rien de plus n'est envoyé au backend)
+      for (const good of currentGoods) {
+        const goodResult = await onAddService(TABLE_DATA_BASE.GOODS, good);
+        if (goodResult !== "success") {
+          toast.error(`Échec de l'ajout de la marchandise « ${good.itemName} ».`);
+          return;
+        }
+      }
+
+      dispatch(setGoods(currentGoods));
+      dispatch(setReservation(currenReservation));
+      if (paid > 0) {
+        dispatch(setCashMouvement(currentCashMouvement));
+      }
+
+      toast.success("Toutes les données ont été ajoutées avec succès !");
+      onReset();
+      onClose();
+    } catch (error) {
+      console.error(error);
+      toast.error("Une erreur est survenue lors de l'ajout des données.");
+    } finally {
+      setIsSaving(false);
+    }
   };
 
-  const onExport = () => {
-    const source = selection.length
-      ? filteredReservations.filter((reservation) => selection.includes(reservation.id))
-      : filteredReservations;
-    const entete = [
-      'Voyage',
-      'Marchandise',
-      'Destination',
-      'Quantité',
-      'Poids total (kg)',
-      'Prix total (Ar)',
-      'Montant payé (Ar)',
-      'Montant restant (Ar)',
-      'Statut',
-      'Caissier',
-    ];
-    const donnees = source.map((reservation) => {
-      const trip = findTrip(reservation.tripId, alltrip);
-      const noms = (marchandisesParReservation.get(reservation.id) ?? []).map(nomMarchandise).join(', ');
-      return [
-        trip ? `${formatCityName(trip.from)} → ${formatCityName(trip.to)}` : 'Voyage inconnu',
-        noms,
-        trip ? formatCityName(trip.to) : '',
-        String(Number(reservation.quantity)),
-        String(reservation.weight ?? ''),
-        String(reservation.totalPrice ?? ''),
-        String(reservation.amountPaid ?? ''),
-        String(reservation.amountToPay ?? ''),
-        getStatutLigne(reservation).libelle,
-        getNomCaissier(reservation.userId),
-      ];
-    });
-    exporterCsv([entete, ...donnees]);
-  };
-
-  const onShowDetailGoodsModal = (reservation: Reservation) => {
+  const onReset = () => {
+    setFormData(formeReservationVoid);
+    setCurrentGoods([]);
+    setPrice(0);
+    setLotNumber("");
+    setErrors({});
+    setCurrentReservation(reservationVoid);
+  }
+  const calculateReste = () => {
+    const paid = Number(formData.amountPaidByClient) || 0;
+    setFormData((prev) => ({ ...prev, rest: priceTotal - paid }));
+  }
+  const setReservationData = () => {
+    const total = currentGoods.reduce((acc, { totalPrice }) => acc + Number(totalPrice), 0);
+    const paid = Number(formData.amountPaidByClient) || 0;
+    let reservation: Reservation = {
+      id: idReservation,
+      clientName: formData.senderName,
+      clientTel: formData.senderPhone,
+      clientAdresse: formData.senderAddress,
+      destName: formData.recipientName,
+      destTel: formData.recipientPhone,
+      destAdresse: formData.recipientAddress,
+      status: "EN_ATTENTE",
+      date: `${new Date().toISOString()}`,
+      quantity: currentGoods.reduce((acc, { quantity }) => acc + Number(quantity), 0),
+      weight: currentGoods.reduce((acc, { totalWeight }) => acc + Number(totalWeight), 0),
+      tripId: formData.tripId,
+      amountPaid: paid,
+      amountToPay: total - paid,
+      paymentStatus: total > 0 && paid >= total,
+      totalPrice: total,
+      userId: currentUser?.id ? currentUser.id : "",
+      idCashMovement: idCashMouvement,
+    }
     setCurrentReservation(reservation);
-    setCurrentGoods(allGoods.filter(({ reservationId }) => reservationId === reservation.id));
-    setShowDetailGoodsModal(true);
-  };
-
+  }
+  useEffect(() => { calculateUnitPrice() }, [formData.totalPrice]);
+  useEffect(() => { setReservationData() }, [currentGoods, formData.amountPaidByClient, priceTotal, formData.senderName, formData.senderPhone, formData.senderAddress, formData.recipientName, formData.recipientPhone, formData.recipientAddress, formData.tripId]);
+  useEffect(() => { calculateDerivedValues() }, [formData.quantity, formData.unitWeight, formData.unitPrice, formData.totalPrice, priceMode]);
+  useEffect(() => { calculatePrice() }, [currentGoods, formData.weight, formData.volume, formData.cargoType]);
+  useEffect(() => { calculateReste(), setCashMouvementFct() }, [formData.amountPaidByClient, priceTotal, paymentMethod]);
   useEffect(() => {
-    setIdReservation(uuid());
-  }, [showAddGoodsModal]);
+    if (!formData.tripId) return;
+    let currentTrip = findTrip(formData.tripId, futureTrips);
+    setIdBoat(currentTrip?.boatId ?? '');
+    totalWeightInTrip()
+  }, [formData.tripId])
+
+  // Icône crayon : remet la marchandise dans le formulaire de saisie pour la modifier
+  const onEditGood = (good: Goods) => {
+    setFormData((prev) => ({
+      ...prev,
+      goods: good.itemName,
+      dateOfGoodsEntry: good.embarkDate,
+      quantity: good.quantity,
+      unitWeight: good.unitWeight,
+      unitPrice: good.unitPrice,
+      totalPrice: good.totalPrice,
+      cargoType: good.types,
+    }));
+    setCurrentGoods((prev) => prev.filter((g) => g.id !== good.id));
+  };
+  const onDeleteGood = (id: string) => {
+    setCurrentGoods((prevGoods) => prevGoods.filter((good) => good.id !== id));
+  };
+  // Clic sur la corbeille : on demande d'abord confirmation
+  const requestDeleteGood = (id: string) => {
+    setGoodToDeleteId(id);
+  };
+  const goodToDelete = currentGoods.find((good) => good.id === goodToDeleteId);
+
+  /* =========================
+     Valeurs d'affichage (calculées, sans effet sur la logique)
+  ========================= */
+  const selectedTrip = formData.tripId ? findTrip(formData.tripId, futureTrips) : undefined;
+  const selectedBoat = findBoat(idBoatSelected, allBoat);
+  const capacityKg = Number(selectedBoat?.capacity || 0) * 1000;
+  const currentWeightKg = currentGoods.reduce((acc, { totalWeight }) => acc + Number(totalWeight), 0);
+  const remainingKg = capacityKg - (weightTrip + currentWeightKg);
+  const isOverloaded = remainingKg < 0;
+  const cashierName = [currentUser?.name, currentUser?.lastName].filter(Boolean).join(" ") || "Caissier";
+  // Champs optionnels du bateau (absents du modèle actuel : affichés s'ils existent, sinon « — »)
+  const boatExtra = (selectedBoat ?? {}) as { photo?: string; image?: string; places?: number; equipments?: string[] | string };
+  const boatPhoto = boatExtra.photo || boatExtra.image;
+  const boatPlaces = boatExtra.places;
+  const boatEquipments = Array.isArray(boatExtra.equipments) ? boatExtra.equipments.join(" • ") : boatExtra.equipments;
+  const fmtAr = (n: number) => `${Number(n || 0).toLocaleString("fr-FR")} Ar`;
+  const fmtDate = (d: string) =>
+    new Date(d).toLocaleString("fr-FR", { day: "2-digit", month: "long", year: "numeric" });
 
   return (
-    <div className="min-h-screen relative text-gray-900 space-y-5">
-      {/* ===== En-tête ===== */}
-      <div className="flex items-center gap-4">
-        <span className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-blue-900 text-white shadow-md">
-          <Ship className="h-7 w-7" />
-        </span>
-        <div>
-          <h2 className="text-2xl font-bold text-blue-900">Gestion des Marchandises</h2>
-          <p className="text-sm text-muted-foreground">Suivi et gestion des marchandises transportées</p>
-        </div>
-      </div>
+    <div className="flex fixed items-center justify-center inset-0 flex-col p-2.5 z-50">
+      <div className="fixed inset-0 bg-black/50" onClick={() => onClose()}></div>
+      <div className="z-50 w-[92%] max-w-6xl space-y-5 overflow-auto bg-slate-100 p-5 rounded-xl max-h-[92vh]">
 
-      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
-        <div className="min-w-0 space-y-5">
-          {/* ===== Cartes de statistiques ===== */}
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-            <CarteStat
-              ton="blue"
-              icone={<Ship className="h-6 w-6" />}
-              titre="Total marchandises"
-              valeur={stats.total}
-              pied={<span className="text-xs text-muted-foreground">{reservationsVisibles.length} réservation(s)</span>}
+        {/* ===== En-tête : titre + ligne / date du voyage ===== */}
+        <Card className="border-blue-100 bg-gradient-to-r from-blue-50 to-white">
+          <CardContent className="pt-6 flex flex-col lg:flex-row gap-4 lg:items-center lg:justify-between">
+            <SectionTitle
+              icon={Package}
+              title="Enregistrement des marchandises"
+              subtitle="Saisissez les informations de vos marchandises pour la réservation."
             />
-            <CarteStat
-              ton="green"
-              icone={<Package className="h-6 w-6" />}
-              titre="En transit"
-              valeur={stats.transit}
-              pourcent={stats.transitPct}
-            />
-            <CarteStat
-              ton="orange"
-              icone={<Clock className="h-6 w-6" />}
-              titre="En attente"
-              valeur={stats.attente}
-              pourcent={stats.attentePct}
-            />
-            <CarteStat
-              ton="red"
-              icone={<CheckCircle2 className="h-6 w-6" />}
-              titre="Livrées"
-              valeur={stats.livrees}
-              pourcent={stats.livreesPct}
-            />
-            <CarteStat
-              ton="purple"
-              icone={<Layers className="h-6 w-6" />}
-              titre="Types différents"
-              valeur={stats.types.length}
-              pied={
-                <span className="block truncate text-xs text-muted-foreground">
-                  {stats.types
-                    .slice(0, 3)
-                    .map(([nom]) => nom)
-                    .join(', ')}
-                  {stats.types.length > 3 ? '…' : ''}
-                </span>
-              }
-            />
-          </div>
-
-          {/* ===== Liste des marchandises ===== */}
-          <Card className="overflow-hidden">
-            <CardContent className="p-0">
-              <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex items-center gap-3">
-                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-900 text-white">
-                    <Package className="h-6 w-6" />
-                  </span>
-                  <h3 className="text-lg font-semibold text-blue-900">
-                    Liste des marchandises ({filteredReservations.length})
-                  </h3>
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <div className="relative w-full min-w-[220px] sm:w-72">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-600" />
-                    <Input
-                      placeholder="Rechercher une marchandise, client ou destination..."
-                      value={searchTerm}
-                      onChange={(e) => {
-                        setSearchTerm(e.target.value);
-                        setPage(1);
-                      }}
-                      className="pl-10"
-                    />
-                  </div>
-                  <Button variant="outline" onClick={() => setShowFilters((courant) => !courant)}>
-                    <Filter className="mr-2 h-4 w-4" /> Filtres
-                  </Button>
-                  <Button variant="outline" onClick={onExport} disabled={filteredReservations.length === 0}>
-                    <Download className="mr-2 h-4 w-4" /> Exporter
-                  </Button>
-                  <Button className="bg-blue-700 hover:bg-blue-800" onClick={() => setShowAddGoodsModal(true)}>
-                    <Plus className="mr-2 h-4 w-4" /> Ajouter une marchandise
-                  </Button>
-                </div>
-              </div>
-
-              {showFilters && (
-                <div className="flex items-center gap-3 border-t bg-blue-50/50 px-4 py-3">
-                  <span className="text-sm">Statut</span>
-                  <Select
-                    value={statusFilter}
-                    onValueChange={(valeur) => {
-                      setStatusFilter(valeur as Filtre);
-                      setPage(1);
-                    }}
-                  >
-                    <SelectTrigger className="w-56 bg-white">
-                      <SelectValue placeholder="Statut" />
+            <div className="rounded-xl bg-blue-100/60 p-3 min-w-[300px] space-y-2">
+              <div className="flex items-start gap-2">
+                <MapPin className="h-5 w-5 text-primary mt-1 shrink-0" />
+                <div className="flex-1 text-sm">
+                  <Label className="text-xs text-gray-600">Voyage prévu</Label>
+                  <Select onValueChange={(v) => handleInput('tripId', v)}>
+                    <SelectTrigger className="bg-white">
+                      <SelectValue placeholder="Choisir un voyage..." />
                     </SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="all">Tous les statuts</SelectItem>
-                      <SelectItem value="paid">Payé</SelectItem>
-                      <SelectItem value="partial">Partiellement payé</SelectItem>
-                      <SelectItem value="credit">Crédit (en attente)</SelectItem>
-                      <SelectItem value="delivered">Livrée</SelectItem>
-                      <SelectItem value="cancelled">Annulée</SelectItem>
+                      {futureTrips.map((trip) => (
+                        <SelectItem key={trip.id} value={trip.id}>{`${trip.from} → ${trip.to} ( ${new Date(trip.depart).toLocaleString('fr-Fr', {
+                          day: "2-digit",
+                          month: "short",
+                          year: "numeric",
+                        })} )`}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </div>
-              )}
-
-              <div className="overflow-x-auto px-4">
-                <Table className="[&_td]:px-2 [&_th]:px-2">
-                  <TableHeader>
-                    <TableRow className="bg-blue-800 hover:bg-blue-800 [&>th]:text-white">
-                      <TableHead className="w-10 rounded-l-lg">
-                        <input
-                          type="checkbox"
-                          aria-label="Tout sélectionner"
-                          checked={toutesSelectionnees}
-                          onChange={basculerPage}
-                        />
-                      </TableHead>
-                      <TableHead>Voyage</TableHead>
-                      <TableHead>Marchandise</TableHead>
-                      <TableHead>Destination</TableHead>
-                      <TableHead className="text-right">Quantité</TableHead>
-                      <TableHead className="text-right">Poids total (kg)</TableHead>
-                      <TableHead className="text-right">Prix total</TableHead>
-                      <TableHead className="text-right">Montant payé</TableHead>
-                      <TableHead className="text-right">Montant restant</TableHead>
-                      <TableHead className="text-center">Statut</TableHead>
-                      <TableHead className="rounded-r-lg text-center">Action</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lignes.map((reservation) => {
-                      const trip = findTrip(reservation.tripId, alltrip);
-                      const statut = getStatutLigne(reservation);
-                      const etatPaiement = getEtatPaiement(reservation);
-                      const marchandises = marchandisesParReservation.get(reservation.id) ?? [];
-                      const premierItem = marchandises[0];
-                      const premier = premierItem ? nomMarchandise(premierItem) : '';
-                      const bateau = trip ? findBoat(trip.boatId, allBoat) : undefined;
-                      const photo = photoBateau(bateau);
-                      const nomBateau = trouverTexte(bateau, ['name'], /^name$/i);
-                      const supplement = marchandises.length > 1 ? ` +${marchandises.length - 1}` : '';
-                      return (
-                        <TableRow
-                          key={reservation.id}
-                          title={`Caissier : ${getNomCaissier(reservation.userId)}`}
-                          className="cursor-pointer hover:bg-blue-50/60"
-                          onClick={() => onShowDetailGoodsModal(reservation)}
-                        >
-                          <TableCell onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              aria-label="Sélectionner la ligne"
-                              checked={selection.includes(reservation.id)}
-                              onChange={() => basculerSelection(reservation.id)}
-                            />
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-3">
-                              {photo ? (
-                                <img
-                                  src={photo}
-                                  alt={nomBateau || 'Bateau'}
-                                  className="h-10 w-14 shrink-0 rounded-md object-cover"
-                                />
-                              ) : (
-                                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-blue-50 text-blue-700">
-                                  <Ship className="h-5 w-5" />
-                                </span>
-                              )}
-                              {trip ? (
-                                <div>
-                                  <p className="whitespace-nowrap font-medium">
-                                    {formatCityName(trip.from)} → {formatCityName(trip.to)}
-                                  </p>
-                                  <p className="text-xs text-gray-500">
-                                    {new Date(trip.depart).toLocaleDateString('fr-FR', {
-                                      day: '2-digit',
-                                      month: 'short',
-                                      year: 'numeric',
-                                    })}
-                                    {nomBateau ? ` · ${nomBateau}` : ''}
-                                  </p>
-                                </div>
-                              ) : (
-                                <span>Voyage inconnu</span>
-                              )}
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center gap-2">
-                              {premier ? (
-                                <GoodsIcon name={premier} />
-                              ) : (
-                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100">
-                                  <Package className="h-5 w-5 text-blue-600" />
-                                </span>
-                              )}
-                              <div>
-                                <p className="font-semibold text-blue-900">
-                                  {premier ? `${premier}${supplement}` : 'Marchandise'}
-                                </p>
-                                <p className="text-xs text-gray-500">{reservation.clientName}</p>
-                              </div>
-                            </div>
-                          </TableCell>
-                          <TableCell>
-                            <p>{trip ? formatCityName(trip.to) : '—'}</p>
-                            <p className="text-xs text-gray-500">{reservation.destName}</p>
-                          </TableCell>
-                          <TableCell className="text-right">{Number(reservation.quantity)}</TableCell>
-                          <TableCell className="text-right">{reservation.weight}</TableCell>
-                          <TableCell className="whitespace-nowrap text-right font-medium">
-                            {formatCurrency(reservation.totalPrice)}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-right">
-                            {formatCurrency(reservation.amountPaid)}
-                          </TableCell>
-                          <TableCell className="whitespace-nowrap text-right font-medium">
-                            {formatCurrency(reservation.amountToPay)}
-                          </TableCell>
-                          <TableCell className="text-center">
-                            <Badge variant="secondary" className={`gap-1 whitespace-nowrap rounded-full ${statut.classe}`}>
-                              <statut.Icon className="h-3.5 w-3.5" />
-                              {statut.libelle}
-                            </Badge>
-                          </TableCell>
-                          <TableCell>
-                            <div className="flex items-center justify-center gap-1">
-                              <Button
-                                size="icon"
-                                title="Voir"
-                                aria-label="Voir"
-                                className="h-8 w-8 bg-blue-600 text-white hover:bg-blue-700"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  onShowDetailGoodsModal(reservation);
-                                }}
-                              >
-                                <Eye className="h-4 w-4" />
-                              </Button>
-                              {etatPaiement === 'PARTIEL' && (
-                                <Button
-                                  size="icon"
-                                  aria-label="Ajouter paiement"
-                                  className="h-8 w-8 bg-orange-500 text-white hover:bg-orange-600"
-                                  title="Ajouter paiement"
-                                  onClick={(e) => {
-                                    e.stopPropagation(); // n'ouvre pas le détail de la ligne
-                                    setReservationPaiement(reservation);
-                                  }}
-                                >
-                                  <CreditCard className="h-4 w-4" />
-                                </Button>
-                              )}
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
               </div>
-
-              {filteredReservations.length === 0 && (
-                <div className="py-8 text-center">
-                  <Package className="mx-auto mb-3 h-12 w-12 text-gray-400" />
-                  <p className="text-gray-500">Aucune réservation trouvée</p>
+              {selectedTrip && (
+                <div className="text-sm pl-7">
+                  <div className="flex items-center gap-1 font-semibold text-[#001F3F]">
+                    {selectedTrip.from} <ArrowRight className="h-4 w-4" /> {selectedTrip.to}
+                  </div>
+                  <div className="text-gray-600">Date : <b>{fmtDate(selectedTrip.depart)}</b></div>
                 </div>
               )}
+            </div>
+          </CardContent>
+        </Card>
 
-              <div className="flex flex-col items-center justify-between gap-3 p-4 text-sm text-muted-foreground sm:flex-row">
-                <span>
-                  {filteredReservations.length === 0
-                    ? 'Aucune marchandise'
-                    : `Affichage de ${debut} à ${fin} sur ${filteredReservations.length} marchandises`}
-                </span>
-                <div className="flex items-center gap-1">
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    className="h-8 w-8"
-                    disabled={pageCourante === 1}
-                    onClick={() => setPage(pageCourante - 1)}
-                    aria-label="Page précédente"
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                  </Button>
-                  {Array.from({ length: pageCount }, (_, index) => index + 1).map((numero) => (
-                    <Button
-                      key={numero}
-                      size="icon"
-                      variant={numero === pageCourante ? 'default' : 'outline'}
-                      className={`h-8 w-8 ${numero === pageCourante ? 'bg-blue-700 hover:bg-blue-800' : ''}`}
-                      onClick={() => setPage(numero)}
-                    >
-                      {numero}
-                    </Button>
-                  ))}
-                  <Button
-                    size="icon"
-                    variant="outline"
-                    className="h-8 w-8"
-                    disabled={pageCourante === pageCount}
-                    onClick={() => setPage(pageCourante + 1)}
-                    aria-label="Page suivante"
-                  >
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
+        {/* ===== Saisie de la marchandise ===== */}
+        <Card>
+          <CardContent className="pt-6 space-y-4">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+              {/* Type de marchandise */}
+              <FieldBox icon={Package}>
+                <Label>Type de marchandise <span className="text-red-500">*</span></Label>
+                <Select onValueChange={(v) => handleInput("cargoType", v)}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="general">Marchandise générale</SelectItem>
+                    <SelectItem value="fragile">Fragile</SelectItem>
+                    <SelectItem value="agricole">Agricole</SelectItem>
+                  </SelectContent>
+                </Select>
+                {errors.cargoType && (<span className="text-red-500 text-sm">{errors.cargoType}</span>)}
+              </FieldBox>
+
+              {/* Champs dynamiques (marchandise, date, quantité, poids unitaire, prix unitaire...) */}
+              {inputFields.map(({ key, label, type }) => (
+                <FieldBox key={key} icon={ICONES_CHAMPS[key] ?? Package}>
+                  <InputField label={label} type={type} value={formData[key as keyof typeof formData] || ""} error={errors[key]} onChange={(v) => handleInput(key as keyof ReservationFormData, v)} />
+                </FieldBox>
+              ))}
+            </div>
+
+            {/* Résumé calculé + moyen de paiement + boutons */}
+            <div className="grid grid-cols-1 lg:grid-cols-4 gap-3 items-stretch">
+              <StatBox icon={Scale} label="Poids total" value={`${Number(formData.totalWeight || 0)} kg`} />
+              <StatBox icon={Banknote} label="Montant à payer par le client" value={fmtAr(formData.totalPrice)} />
+
+              <div className="rounded-xl bg-blue-50 p-4 space-y-2">
+                <div className="flex items-center gap-2 text-sm text-gray-700">
+                  <CreditCard className="h-4 w-4 text-primary" /> Moyen de paiement
                 </div>
-              </div>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* ===== Colonne de droite ===== */}
-        <div className="space-y-4">
-          <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-sky-500 to-blue-800 p-4 text-white shadow-md">
-            {photoBanniere ? (
-              <>
-                <img src={photoBanniere} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                <div className="absolute inset-0 bg-gradient-to-r from-blue-900/90 via-blue-800/70 to-transparent" />
-              </>
-            ) : (
-              <Ship className="absolute -right-2 -top-2 h-24 w-24 text-white/15" />
-            )}
-            <p className="relative text-lg font-semibold leading-snug">
-              Les marchandises
-              <br />
-              au cœur de votre voyage
-            </p>
-            <p className="relative mt-1 text-sm text-blue-100">Un transport sûr, rapide et fiable.</p>
-          </div>
-
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="flex items-center gap-2 text-base text-blue-900">
-                <Filter className="h-5 w-5" /> Filtres rapides
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div>
-                <p className="mb-2 text-sm font-semibold text-blue-900">Statut</p>
-                <div className="space-y-2">
-                  {filtresRapides.map(({ cle, libelle, Icon, couleur }) => (
-                    <label key={cle} className="flex cursor-pointer items-center justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={statusFilter === cle}
-                          onChange={() => basculerFiltre(cle)}
-                        />
-                        <Icon className={`h-4 w-4 ${couleur}`} /> {libelle}
-                      </span>
-                      <span className="font-medium text-blue-900">{compteurFiltre(cle)}</span>
-                    </label>
-                  ))}
-                </div>
+                <Select value={paymentMethod} onValueChange={(v) => setPaymentMethod(v as MoyenPaiement)}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="banque">Banque</SelectItem>
+                    <SelectItem value="mvola">MVola</SelectItem>
+                    <SelectItem value="caisse">Caisse</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Label className="text-xs text-gray-600">Calcul du prix</Label>
+                <Select value={priceMode} onValueChange={(v) => setPriceMode(v as "auto" | "manual")}>
+                  <SelectTrigger className="bg-white">
+                    <SelectValue placeholder="..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="auto">Automatique (quantité × prix unitaire)</SelectItem>
+                    <SelectItem value="manual">Saisie du prix total</SelectItem>
+                  </SelectContent>
+                </Select>
+                {priceMode === "manual" && (
+                  <Input
+                    type="number"
+                    placeholder="Prix total (Ar)"
+                    value={formData.totalPrice}
+                    onChange={(e) => handleInput('totalPrice', e.target.value)}
+                    className="bg-white"
+                  />
+                )}
               </div>
 
-              <div>
-                <p className="mb-2 text-sm font-semibold text-blue-900">Type de marchandise</p>
-                <div className="space-y-2">
-                  {stats.types.slice(0, 5).map(([nom, nombre]) => (
-                    <div key={nom} className="flex items-center justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <GoodsIcon name={nom} /> {nom}
-                      </span>
-                      <span className="font-medium text-blue-900">{nombre}</span>
-                    </div>
-                  ))}
-                  {stats.types.length > 5 && (
-                    <div className="flex items-center justify-between text-sm">
-                      <span className="flex items-center gap-2">
-                        <Layers className="h-5 w-5 text-blue-600" /> Autres
-                      </span>
-                      <span className="font-medium text-blue-900">
-                        {stats.types.slice(5).reduce((somme, [, nombre]) => somme + nombre, 0)}
-                      </span>
-                    </div>
-                  )}
-                  {stats.types.length === 0 && (
-                    <p className="text-xs text-muted-foreground">Aucun type de marchandise.</p>
-                  )}
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-blue-50/60">
-            <CardContent className="space-y-1 p-4">
-              <p className="flex items-center gap-2 text-sm font-semibold text-blue-900">
-                <BarChart3 className="h-4 w-4" /> Statistiques
-              </p>
-              <p className="text-xs text-muted-foreground">Valeur totale des marchandises</p>
-              <p className="text-2xl font-bold text-blue-900">{formatCurrency(stats.valeurTotale)}</p>
-            </CardContent>
-          </Card>
-
-          <div className="rounded-xl bg-gradient-to-br from-blue-700 to-blue-900 p-4 text-white shadow-md">
-            <div className="flex items-start gap-3">
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-white/15">
-                <Bot className="h-7 w-7" />
-              </span>
-              <div>
-                <p className="text-lg font-semibold">Besoin d’aide ?</p>
-                <p className="text-sm text-blue-100">L’assistant IA est disponible pour vos marchandises.</p>
+              <div className="flex flex-col justify-center gap-2 rounded-xl border p-4">
+                <Button className="bg-green-700 hover:bg-green-800 text-white" onClick={onHadlSubmit}>
+                  <PlusCircle className="w-4 h-4 mr-2" />
+                  Ajouter
+                </Button>
+                <Button variant="outline" onClick={() => onClose()}>
+                  <XCircle className="w-4 h-4 mr-2" />
+                  Annuler
+                </Button>
               </div>
             </div>
-            <Button
-              className="mt-4 w-full bg-white text-blue-800 hover:bg-blue-50"
-              onClick={onOpenAssistant}
-              disabled={!onOpenAssistant}
-            >
-              <ChevronRight className="mr-2 h-4 w-4" /> Ouvrir l’assistant
-            </Button>
-          </div>
+          </CardContent>
+        </Card>
+
+        {/* ===== Récapitulatif des marchandises ===== */}
+        <Card>
+          <CardContent className="pt-6">
+            <SectionTitle
+              icon={CheckCircle}
+              color="bg-green-700"
+              title="Récapitulatif des marchandises"
+              subtitle="Liste des marchandises ajoutées à cette réservation."
+            />
+            <div className="overflow-x-auto rounded-xl border">
+              <table className="w-full text-sm text-center">
+                <thead className="bg-blue-50 text-[#001F3F]">
+                  <tr>
+                    {["Client", "Marchandise", "Caissier", "Quantité", "Poids Unit. (kg)", "Poids Total (kg)", "Prix Unitaire", "Prix Total", "Action"].map((h) => (
+                      <th key={h} className="px-3 py-2 font-semibold whitespace-nowrap">{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {currentGoods.length === 0 && (
+                    <tr><td colSpan={9} className="py-6 text-muted-foreground">Aucune marchandise ajoutée.</td></tr>
+                  )}
+                  {currentGoods.map((good) => (
+                    <Fragment key={good.id}>
+                      <tr className="border-t">
+                        <td className="px-3 py-2 text-left whitespace-nowrap">
+                          <span className="inline-flex items-center gap-2"><User className="h-4 w-4 text-primary" />{formData.senderName || "—"}</span>
+                        </td>
+                        <td className="px-3 py-2 text-left font-medium">
+                          <span className="inline-flex items-center gap-2">
+                            <GoodsIcon name={String(good.itemName ?? "")} />
+                            {good.itemName}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-2"><User className="h-4 w-4 text-primary" />{cashierName}</span>
+                        </td>
+                        <td className="px-3 py-2">{good.quantity}</td>
+                        <td className="px-3 py-2">{good.unitWeight}</td>
+                        <td className="px-3 py-2">{good.totalWeight}</td>
+                        <td className="px-3 py-2 whitespace-nowrap">{fmtAr(good.unitPrice)}</td>
+                        <td className="px-3 py-2 font-bold whitespace-nowrap">{fmtAr(good.totalPrice)}</td>
+                        <td className="px-3 py-2">
+                          <div className="flex items-center justify-center gap-2">
+                            <button type="button" title="Voir" className="h-8 w-8 rounded-md bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700"
+                              onClick={() => setViewedGoodId(viewedGoodId === good.id ? null : good.id)}>
+                              <Eye className="h-4 w-4" />
+                            </button>
+                            <button type="button" title="Modifier" className="h-8 w-8 rounded-md bg-blue-600 text-white flex items-center justify-center hover:bg-blue-700"
+                              onClick={() => onEditGood(good)}>
+                              <Pencil className="h-4 w-4" />
+                            </button>
+                            <button type="button" title="Supprimer" className="h-8 w-8 rounded-md bg-red-500 text-white flex items-center justify-center hover:bg-red-600"
+                              onClick={() => requestDeleteGood(good.id)}>
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                      {viewedGoodId === good.id && (
+                        <tr className="bg-slate-50 text-left">
+                          <td colSpan={9} className="px-4 py-2 text-sm">
+                            Type : <b>{good.types}</b> · Date d'entrée : <b>{good.embarkDate}</b> · Montant à payer : <b>{fmtAr(Number(good.amountToPay))}</b>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex justify-end items-center gap-6 mt-3 pr-2 font-semibold">
+              <span>Total général : {currentWeightKg} kg</span>
+              <span className="text-lg text-green-700">{fmtAr(priceTotal)}</span>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ===== Bateau / Actions rapides / Paiement ===== */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {/* Informations sur le bateau */}
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <SectionTitle icon={Ship} title="Informations sur le bateau" />
+              {idBoatSelected ? (
+                <>
+                  <div className="flex gap-3">
+                    {boatPhoto ? (
+                      <img src={boatPhoto} alt={selectedBoat?.name} className="h-28 w-36 rounded-lg object-cover shrink-0" />
+                    ) : (
+                      <div className="h-28 w-36 rounded-lg bg-gradient-to-br from-blue-100 to-blue-300 text-primary flex items-center justify-center shrink-0">
+                        <Ship className="h-12 w-12" />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0 space-y-1 text-sm">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-[#001F3F]">{selectedBoat?.name}</span>
+                        <span className="text-xs rounded-full bg-green-100 text-green-700 px-2 py-0.5">{selectedBoat?.state}</span>
+                      </div>
+                      <div>Capacité totale : <b>{selectedBoat?.capacity} T</b></div>
+                      <div>Places disponibles : <b>{boatPlaces ?? "—"}</b></div>
+                      <div className="text-gray-600">{boatEquipments || "Équipements : —"}</div>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-lg bg-blue-50 p-2 text-primary">
+                      <div className="text-[11px] text-gray-600">Poids supporté par le bateau</div>
+                      <div className="font-bold">{selectedBoat?.capacity} T</div>
+                    </div>
+                    <div className={`rounded-lg p-2 ${isOverloaded ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                      <div className="text-[11px]">Poids restant</div>
+                      <div className="font-bold">{remainingKg / 1000} T</div>
+                      {isOverloaded && (
+                        <div className="flex items-center justify-center gap-1 text-[10px]">
+                          <AlertTriangle className="h-3 w-3" /> Dépassement
+                        </div>
+                      )}
+                    </div>
+                    <div className="rounded-lg bg-green-50 p-2 text-green-700">
+                      <div className="text-[11px]">Poids actuel</div>
+                      <div className="font-bold">{currentWeightKg / 1000} T</div>
+                    </div>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">Choisissez d'abord un voyage.</p>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Actions rapides */}
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <SectionTitle icon={Zap} title="Actions rapides" />
+              <Button className="w-full" onClick={() => payTotal(priceTotal)}>
+                <CreditCard className="w-4 h-4 mr-2" />
+                Payer la totalité
+              </Button>
+              <Button className="w-full" variant="outline" onClick={generateLotNumber}>
+                <Tag className="w-4 h-4 mr-2" />
+                Générer étiquette
+              </Button>
+              <div className="rounded-lg bg-slate-50 px-3 py-2 text-sm flex items-center gap-2">
+                <Barcode className="h-4 w-4" /> Numéro de lot :
+                <span className="rounded bg-slate-200/70 px-2 py-0.5 font-medium">{lotNumber || "Non généré"}</span>
+              </div>
+              {lotNumber !== "" && <QrCode idendifiant={lotNumber} />}
+            </CardContent>
+          </Card>
+
+          {/* Paiement */}
+          <Card>
+            <CardContent className="pt-6 space-y-3">
+              <SectionTitle icon={Wallet} color="bg-green-700" title="Paiement" />
+              <LigneInfo icon={Banknote} label="Prix total" value={fmtAr(priceTotal)} />
+              <div className="flex items-center gap-2">
+                <Label className="whitespace-nowrap">Montant payé :</Label>
+                <Input type="number" value={formData.amountPaidByClient} onChange={(v) => handleInput("amountPaidByClient", Number(v.target.value) || 0)} className="w-full" />
+              </div>
+              <div className="text-sm">
+                Moyen de paiement : <span className="font-medium">{MOYENS_PAIEMENT[paymentMethod]}</span>
+              </div>
+              {formData.rest >= 0 ? (
+                <LigneInfo icon={Wallet} label="Montant restant" value={fmtAr(formData.rest)} danger={formData.rest > 0} />
+              ) : (
+                <p className="text-red-600 text-sm">Le montant saisi est supérieur</p>
+              )}
+            </CardContent>
+          </Card>
         </div>
+
+        {/* ===== Informations sur le client (expéditeur + destinataire) ===== */}
+        <Card>
+          <CardContent className="pt-6 space-y-5">
+            <SectionTitle icon={User} title="Informations sur le client" subtitle="Vos coordonnées pour la réservation." />
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <FieldBox icon={User}>
+                <InputField label="Nom complet *" value={formData.senderName} error={errors.senderName} onChange={(v) => handleInput("senderName", v)} />
+              </FieldBox>
+              <FieldBox icon={Phone}>
+                <InputField label="Téléphone * (10 chiffres)" value={formData.senderPhone} error={errors.senderPhone} onChange={(v) => handlePhone("senderPhone", v)} />
+              </FieldBox>
+              <FieldBox icon={Mail}>
+                <InputField label="E-mail" value={clientEmail} onChange={(v) => setClientEmail(String(v))} />
+              </FieldBox>
+              <FieldBox icon={StickyNote}>
+                <InputField label="Notes (facultatif)" value={clientNotes} onChange={(v) => setClientNotes(String(v))} />
+              </FieldBox>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <FieldBox icon={MapPin}>
+                <InputField label="Adresse de l'expéditeur *" value={formData.senderAddress} error={errors.senderAddress} onChange={(v) => handleInput("senderAddress", v)} />
+              </FieldBox>
+            </div>
+
+            <div>
+              <h4 className="font-semibold mb-2 flex items-center gap-2"><User className="h-4 w-4" /> Destinataire</h4>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <FieldBox icon={User}>
+                  <InputField label="Nom complet" value={formData.recipientName} error={errors.recipientName} onChange={(v) => handleInput("recipientName", v)} />
+                </FieldBox>
+                <FieldBox icon={Phone}>
+                  <InputField label="Téléphone (10 chiffres)" value={formData.recipientPhone} error={errors.recipientPhone} onChange={(v) => handlePhone("recipientPhone", v)} />
+                </FieldBox>
+                <FieldBox icon={MapPin}>
+                  <InputField label="Adresse" value={formData.recipientAddress} error={errors.recipientAddress} onChange={(v) => handleInput("recipientAddress", v)} />
+                </FieldBox>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* ===== Confirmer ===== */}
+        <Button className="w-full px-6 py-6 text-lg rounded-xl" onClick={onAdd} disabled={isSaving}>
+          <CheckCircle className="w-5 h-5 mr-2" />
+          {isSaving ? "Enregistrement..." : "Confirmer réservation"}
+          {!isSaving && <ArrowRight className="w-5 h-5 ml-2" />}
+        </Button>
       </div>
 
-      {showDetailGoodsModal && (
-        <ModalUpdateGood
-          currentGoods={currentGoods}
-          currentReservation={currentReservation}
-          onClose={() => setShowDetailGoodsModal(false)}
-        />
-      )}
-      {showAddGoodsModal && (
-        <ReservationForm onClose={() => setShowAddGoodsModal(false)} idReservation={idReservation} />
-      )}
-      {reservationPaiement && (
-        <PaiementModal reservation={reservationPaiement} onClose={() => setReservationPaiement(null)} />
-      )}
+      {/* Confirmation avant suppression d'une marchandise */}
+      <ConfirmDialog
+        open={goodToDeleteId !== null}
+        title="Supprimer la marchandise"
+        message={`Voulez-vous vraiment supprimer ${goodToDelete?.itemName ? `« ${goodToDelete.itemName} »` : "cette marchandise"} ?`}
+        confirmLabel="Oui, supprimer"
+        cancelLabel="Non"
+        onCancel={() => setGoodToDeleteId(null)}
+        onConfirm={() => {
+          if (goodToDeleteId) onDeleteGood(goodToDeleteId);
+          setGoodToDeleteId(null);
+        }}
+      />
     </div>
-  );
-};
+  )
+}
 
-export default MarchandiseManagementPage;
+export default ReservationForm;
