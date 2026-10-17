@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   BarChart3,
@@ -30,7 +30,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Badge } from './ui/badge';
 import { RootState } from '../redux';
 import { findBoat, findTrip, formatCityName, formatCurrency } from '../Tools/Tools';
-import { askAssistant } from '../data/intelligenceService';
+import GoodsIcon from './GoodsIcon';
 import ReservationForm from './GoodsForm';
 import { v4 as uuid } from 'uuid';
 import ModalUpdateGood from './GoodsModalUpdate';
@@ -171,7 +171,7 @@ const trouverTexte = (source: unknown, cles: string[], motif: RegExp, exclure?: 
 const nomMarchandise = (item: Goods) =>
   trouverTexte(
     item,
-    ['name', 'goodsName', 'nom', 'designation', 'label', 'libelle', 'title', 'description', 'productName', 'item', 'type', 'goodsType'],
+    ['itemName', 'name', 'goodsName', 'nom', 'designation', 'label', 'libelle', 'title', 'description', 'productName', 'item', 'type', 'goodsType'],
     /name|nom|desig|label|libelle|title|descr|product|item|marchand|goods|type/i,
     /id$|^id|reservation|user|client|trip|boat|created|updated|date|status/i
   );
@@ -179,128 +179,6 @@ const nomMarchandise = (item: Goods) =>
 // Photo du bateau (ajoutée depuis « Gestion de bateau »)
 const photoBateau = (bateau: unknown) =>
   trouverTexte(bateau, ['image', 'photo', 'imageUrl', 'picture', 'img'], /image|photo|picture|img/i);
-
-/* =========================
-   Icône de marchandise (même principe que dans le récapitulatif du formulaire)
-   1. emoji reconnu par mot-clé d'après le NOM ACTUEL de la marchandise
-   2. emoji proposé par l'IA pour ce nom (gardé en cache dans le navigateur)
-   3. icône enregistrée sur la marchandise (champ icon / emoji)
-   4. sinon 📦
-========================= */
-const EMOJIS: [RegExp, string][] = [
-  [/moto|scooter|motard/, '🏍️'],
-  [/voiture|\bauto\b|taxi|\bcar\b/, '🚗'],
-  [/camion|truck/, '🚚'],
-  [/velo|bicyclette|\bbike\b/, '🚲'],
-  [/bateau|pirogue|barque/, '🚤'],
-  [/pomme de terre|patate/, '🥔'],
-  [/fruit|pomme/, '🍎'],
-  [/banane/, '🍌'],
-  [/mangue/, '🥭'],
-  [/ananas/, '🍍'],
-  [/litchi|letchi/, '🍒'],
-  [/legume|carotte/, '🥕'],
-  [/tomate/, '🍅'],
-  [/oignon/, '🧅'],
-  [/manioc/, '🍠'],
-  [/\briz\b/, '🍚'],
-  [/\bble\b|\bmais\b|cereale/, '🌾'],
-  [/vanille/, '🌿'],
-  [/girofle|epice|poivre/, '🌶️'],
-  [/cafe/, '☕'],
-  [/cacao|chocolat/, '🍫'],
-  [/\bthe\b/, '🍵'],
-  [/sucre/, '🍬'],
-  [/\bsel\b/, '🧂'],
-  [/gasoil|diesel|carbur|essence|petrole|fuel/, '⛽'],
-  [/\bgaz\b/, '🔥'],
-  [/huile/, '🛢️'],
-  [/bois|planche|bambou/, '🪵'],
-  [/ciment|brique|construct|\bfer\b|tole|acier/, '🧱'],
-  [/vetement|habit|tissu|chaussure/, '👕'],
-  [/poisson|crevette|crabe|langouste/, '🐟'],
-  [/viande|zebu|boeuf|poulet|porc|volaille/, '🥩'],
-  [/meuble|table|chaise|\blit\b|armoire/, '🪑'],
-  [/medicament|pharma/, '💊'],
-  [/ordinateur|telephone|electro|\btele\b|frigo|radio/, '💻'],
-  [/eau|boisson|jus|biere|soda/, '🥤'],
-  [/livre|papier|carton|colis/, '📦'],
-];
-
-const emojiLocal = (nom: string): string => {
-  const valeur = normaliserTexte(nom);
-  for (const [motif, emoji] of EMOJIS) if (motif.test(valeur)) return emoji;
-  return '';
-};
-
-const iconeStockee = (item: Goods): string => {
-  const valeur = trouverTexte(item, ['icon', 'emoji', 'icone', 'goodsIcon'], /icon|emoji/i);
-  return valeur && valeur.length <= 8 ? valeur : '';
-};
-
-const CLE_CACHE_ICONES = 'saintjude.goodsIcons';
-
-const lireCacheIcones = (): Record<string, string> => {
-  try {
-    return JSON.parse(localStorage.getItem(CLE_CACHE_ICONES) ?? '{}') as Record<string, string>;
-  } catch {
-    return {};
-  }
-};
-
-const extraireEmoji = (texte: string): string =>
-  texte.match(/\p{Extended_Pictographic}(?:\uFE0F|\u200D\p{Extended_Pictographic})*/u)?.[0] ?? '';
-
-// Demande un emoji à l'IA pour les marchandises qu'aucun mot-clé ne reconnaît
-function useIconesIA(noms: string[]) {
-  const [icones, setIcones] = useState<Record<string, string>>(lireCacheIcones);
-  const enCours = useRef(new Set<string>());
-  const signature = noms.join('|');
-
-  useEffect(() => {
-    noms.forEach(async (nom) => {
-      const cle = normaliserTexte(nom);
-      if (!cle || icones[cle] || emojiLocal(nom) || enCours.current.has(cle)) return;
-      enCours.current.add(cle);
-      try {
-        const reponse: unknown = await askAssistant({
-          question: `Réponds uniquement par un seul emoji qui représente cette marchandise : "${nom}".`,
-          context: '',
-        });
-        const emoji = extraireEmoji(typeof reponse === 'string' ? reponse : JSON.stringify(reponse ?? ''));
-        if (!emoji) return;
-        setIcones((courant) => {
-          const suite = { ...courant, [cle]: emoji };
-          try {
-            localStorage.setItem(CLE_CACHE_ICONES, JSON.stringify(suite));
-          } catch {
-            // stockage indisponible : l'icône reste affichée pour cette session
-          }
-          return suite;
-        });
-      } catch {
-        // L'IA est facultative : on garde l'icône par défaut
-      } finally {
-        enCours.current.delete(cle); // permet de réessayer au prochain changement de nom
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature]);
-
-  return icones;
-}
-
-function PastilleMarchandise({ emoji, petite = false }: { emoji: string; petite?: boolean }) {
-  return (
-    <span
-      className={`flex shrink-0 items-center justify-center rounded-full bg-amber-100 ${
-        petite ? 'h-7 w-7 text-sm' : 'h-9 w-9 text-lg'
-      }`}
-    >
-      {emoji}
-    </span>
-  );
-}
 
 const exporterCsv = (lignes: string[][]) => {
   const echapper = (valeur: string) => `"${valeur.replace(/"/g, '""')}"`;
@@ -575,19 +453,6 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     });
     return carte;
   }, [marchandisesVisibles]);
-
-  const nomsMarchandises = useMemo(
-    () => Array.from(new Set(marchandisesVisibles.map(nomMarchandise).filter(Boolean))),
-    [marchandisesVisibles]
-  );
-  const iconesIA = useIconesIA(nomsMarchandises);
-
-  const emojiNom = (nom: string) => emojiLocal(nom) || iconesIA[normaliserTexte(nom)] || '📦';
-  // Le NOM ACTUEL de la marchandise l'emporte : renommer une marchandise met à jour son icône
-  const emojiMarchandise = (item: Goods) => {
-    const nom = nomMarchandise(item);
-    return emojiLocal(nom) || iconesIA[normaliserTexte(nom)] || iconeStockee(item) || '📦';
-  };
 
   // Photo du premier bateau qui en possède une (bannière de droite)
   const photoBanniere = useMemo(() => {
@@ -882,7 +747,6 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                       const marchandises = marchandisesParReservation.get(reservation.id) ?? [];
                       const premierItem = marchandises[0];
                       const premier = premierItem ? nomMarchandise(premierItem) : '';
-                      const emoji = premierItem ? emojiMarchandise(premierItem) : '📦';
                       const bateau = trip ? findBoat(trip.boatId, allBoat) : undefined;
                       const photo = photoBateau(bateau);
                       const nomBateau = trouverTexte(bateau, ['name'], /^name$/i);
@@ -936,7 +800,13 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                           </TableCell>
                           <TableCell>
                             <div className="flex items-center gap-2">
-                              <PastilleMarchandise emoji={emoji} />
+                              {premier ? (
+                                <GoodsIcon name={premier} />
+                              ) : (
+                                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-100">
+                                  <Package className="h-5 w-5 text-blue-600" />
+                                </span>
+                              )}
                               <div>
                                 <p className="font-semibold text-blue-900">
                                   {premier ? `${premier}${supplement}` : 'Marchandise'}
@@ -1105,7 +975,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                   {stats.types.slice(0, 5).map(([nom, nombre]) => (
                     <div key={nom} className="flex items-center justify-between text-sm">
                       <span className="flex items-center gap-2">
-                        <PastilleMarchandise emoji={emojiNom(nom)} petite /> {nom}
+                        <GoodsIcon name={nom} /> {nom}
                       </span>
                       <span className="font-medium text-blue-900">{nombre}</span>
                     </div>
