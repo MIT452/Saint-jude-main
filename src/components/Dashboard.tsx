@@ -5,8 +5,8 @@ import {
 } from "recharts";
 import {
   Ship, Calculator, TrendingUp, TrendingDown, Bell, Search, Calendar, ChevronDown, UserCircle2, ClipboardList,
-  Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle, Wrench,
-  BarChart3, Brain, Lock, Navigation, Fuel, ShieldCheck, MapPin,
+  Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle,
+  BarChart3, Brain, Lock, Navigation, ShieldCheck, MapPin,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
@@ -46,6 +46,33 @@ const wmo = (c: number): { label: string; Icon: LucideIcon } => {
   return { label: "Pluie", Icon: CloudRain };
 };
 const compass = (deg: number) => ["N", "NE", "E", "SE", "S", "SO", "O", "NO"][Math.round(deg / 45) % 8];
+
+// ---------- Carte de Madagascar (contour simplifié, projection lon/lat -> SVG)
+const proj = (lon: number, lat: number): [number, number] => [(lon - 43) * 20, (-lat - 11.7) * 20];
+const COAST: [number, number][] = [
+  [49.27, -12.0], [49.55, -12.5], [49.9, -13.1], [50.1, -13.9], [50.25, -14.6], [50.1, -15.3], [49.85, -15.7],
+  [49.75, -16.4], [49.6, -17.0], [49.45, -17.6], [49.42, -18.2], [49.1, -19.0], [48.8, -19.9], [48.5, -20.8],
+  [48.3, -21.5], [48.05, -22.2], [47.85, -22.9], [47.6, -23.6], [47.3, -24.4], [47.0, -25.0], [46.3, -25.3],
+  [45.15, -25.6], [44.2, -25.2], [43.7, -24.4], [43.65, -23.4], [43.4, -22.4], [43.3, -21.6], [43.7, -20.9],
+  [44.3, -20.2], [44.4, -19.4], [44.2, -18.6], [44.0, -18.0], [44.3, -17.2], [45.1, -16.6], [45.6, -15.9],
+  [46.3, -15.7], [46.9, -15.3], [47.5, -14.8], [47.9, -14.3], [48.0, -13.6], [48.4, -13.2], [48.8, -12.7],
+  [49.0, -12.2], [49.27, -11.95],
+];
+const MADA_PATH = COAST.map(([lo, la], i) => `${i ? "L" : "M"}${proj(lo, la).map((v) => v.toFixed(1)).join(",")}`).join(" ") + " Z";
+const CITIES: { n: string; lon: number; lat: number; port?: boolean; left?: boolean }[] = [
+  { n: "Antsiranana", lon: 49.29, lat: -12.28, port: true, left: true },
+  { n: "Mahajanga", lon: 46.32, lat: -15.72, port: true },
+  { n: "Toamasina", lon: 49.41, lat: -18.15, port: true, left: true },
+  { n: "Antananarivo", lon: 47.52, lat: -18.91 },
+  { n: "Morondava", lon: 44.28, lat: -20.28, port: true },
+  { n: "Toliara", lon: 43.68, lat: -23.35, port: true },
+  { n: "Tolagnaro", lon: 47.0, lat: -25.03, port: true, left: true },
+];
+const boatPos = (b: any): [number, number] | null => {
+  const la = Number(b.latitude ?? b.lat);
+  const lo = Number(b.longitude ?? b.lng ?? b.lon);
+  return Number.isFinite(la) && Number.isFinite(lo) && lo > 42 && lo < 52 && la < -10 && la > -27 ? [lo, la] : null;
+};
 
 const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [revenuePeriod, setRevenuePeriod] = useState("mensuelle");
@@ -299,25 +326,55 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
 
         <div className={`${card} p-4`}>
-          <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi des Bateaux</h3>
-          <p className="text-[11px] text-gray-500 mb-2">État de la flotte</p>
-          <div className="space-y-2 max-h-[230px] overflow-y-auto">
-            {boats.length === 0 && <p className="text-xs text-gray-500 py-6 text-center">Aucun bateau enregistré.</p>}
-            {boats.map((b, i) => {
-              const st = boatState(b);
-              const ok = /(dispo|service|route|actif)/i.test(st);
-              const maint = /maint/i.test(st);
-              return (
-                <div key={i} className="border rounded-lg p-2.5 text-[11px] bg-[#f8fafd] flex items-center gap-2">
-                  <MapPin size={16} className={maint ? "text-orange-500" : ok ? "text-green-600" : "text-[#1255d6]"} />
-                  <div className="flex-1">
-                    <p className="font-bold text-xs">{boatName(b)}</p>
-                    <p className={`font-semibold ${maint ? "text-orange-500" : ok ? "text-green-600" : "text-gray-600"}`}>{st}</p>
+          <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi GPS des Bateaux</h3>
+          <p className="text-[11px] text-gray-500 mb-2">Position en temps réel</p>
+          <div className="grid grid-cols-[1fr_1.1fr] gap-2">
+            <div className="rounded-lg bg-[#d9ecfb] border h-[230px] overflow-hidden">
+              <svg viewBox="0 0 160 290" className="w-full h-full">
+                <path d={MADA_PATH} fill="#e6efd9" stroke="#7fa36a" strokeWidth="0.8" strokeLinejoin="round" />
+                {CITIES.map((c) => {
+                  const [x, y] = proj(c.lon, c.lat);
+                  return (
+                    <g key={c.n}>
+                      <circle cx={x} cy={y} r={c.port ? 2.6 : 1.8} fill={c.port ? "#1255d6" : "#64748b"} />
+                      <text x={c.left ? x - 4 : x + 4} y={y + 2.5} fontSize="7" textAnchor={c.left ? "end" : "start"} fill="#10285e">{c.n}</text>
+                    </g>
+                  );
+                })}
+                {boats.map((b, i) => {
+                  const p = boatPos(b);
+                  if (!p) return null;
+                  const [x, y] = proj(p[0], p[1]);
+                  const maint = /maint/i.test(boatState(b));
+                  return (
+                    <g key={i}>
+                      <circle cx={x} cy={y} r={6} fill={maint ? "#ef4444" : "#22c55e"} fillOpacity={0.25} />
+                      <circle cx={x} cy={y} r={3} fill={maint ? "#ef4444" : "#22c55e"} stroke="#fff" strokeWidth="1" />
+                      <text x={x + 6} y={y - 5} fontSize="7" fontWeight="700" fill="#10285e">{boatName(b)}</text>
+                    </g>
+                  );
+                })}
+              </svg>
+            </div>
+            <div className="space-y-2 max-h-[230px] overflow-y-auto">
+              {boats.length === 0 && <p className="text-xs text-gray-500 py-6 text-center">Aucun bateau enregistré.</p>}
+              {boats.map((b, i) => {
+                const st = boatState(b);
+                const maint = /maint/i.test(st);
+                const p = boatPos(b);
+                return (
+                  <div key={i} className="border rounded-lg p-2 text-[10px] bg-[#f8fafd]">
+                    <p className="font-bold text-xs flex items-center gap-1"><i className={`w-2 h-2 rounded-full inline-block ${maint ? "bg-red-500" : "bg-green-500"}`} />{boatName(b)}</p>
+                    <p className={`font-semibold ${maint ? "text-orange-500" : "text-green-600"}`}>{st}</p>
+                    <p className="text-gray-600">{p ? `Lat : ${p[1].toFixed(2)}  Lon : ${p[0].toFixed(2)}` : "Position GPS non renseignée"}</p>
                   </div>
-                  {b.capacity != null && <span className="text-gray-500">{b.capacity} t</span>}
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex gap-3 text-[10px] mt-2">
+            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-green-500 inline-block" />Bateau en route</span>
+            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-red-500 inline-block" />Bateau à l'arrêt</span>
           </div>
         </div>
 
@@ -418,8 +475,8 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         {[
           [Lock, "Sécurité des données", "Chiffrement & sauvegarde"],
           [Brain, "IA & Analytics", "Des décisions plus éclairées"],
-          [Fuel, "Carburant", "Suivi de consommation"],
-          [Wrench, "Maintenance", "Flotte sous surveillance"],
+          [MapPin, "GPS & Cartographie", "Suivi en temps réel des bateaux"],
+          [Cloud, "Météo Marine", "Navigation sécurisée"],
         ].map(([I, t, s]: any) => (
           <div key={t} className="flex items-center gap-2"><I size={22} className="text-[#1255d6]" /><div><p className="font-semibold">{t}</p><p className="text-gray-500 text-[10px]">{s}</p></div></div>
         ))}
