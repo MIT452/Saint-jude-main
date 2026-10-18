@@ -4,82 +4,183 @@ import {
   PieChart, Pie, Cell, AreaChart, Area, LabelList,
 } from "recharts";
 import {
-  Ship, Calculator, TrendingUp, TrendingDown, Bell, Search, Calendar, ChevronDown, UserCircle2, Package,
-  Wind, Waves, Droplets, Eye, Cloud, MapPin, AlertTriangle, Wrench, CloudRain, ArrowRight,
-  BarChart3, Brain, Lock, Navigation, Fuel, ShieldCheck,
+  Ship, Calculator, TrendingUp, TrendingDown, Bell, Search, Calendar, ChevronDown, UserCircle2, ClipboardList,
+  Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle, Wrench,
+  BarChart3, Brain, Lock, Navigation, Fuel, ShieldCheck, MapPin,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
 import { RootState } from "../redux";
 import { formatCurrency, generateRevenueDataSets } from "../Tools/Tools";
 import { RevenueDataSets } from "../data/type";
 import { revenueDataSetsVoid } from "../data/dataVoid";
+import { askAIJson } from "../data/auditAI";
 
 interface PropsDashboard {
   onSetToAudit: (value: string) => void;
 }
 
+type Level = "Faible" | "Moyen" | "Élevé";
+type Alert = { t: string; s: string; lvl: Level };
+type Insight = { analyse: string; prevision: string; alertes: Alert[] };
+type Weather = {
+  temp: number; label: string; Icon: LucideIcon; wind: string; humidity: number; visibility: number; wave: number | null;
+  days: { d: string; t: string; label: string; Icon: LucideIcon }[];
+};
+
 const card = "bg-white rounded-xl border border-[#dbe5f5] shadow-sm";
 const pad = (n: number) => String(n).padStart(2, "0");
+const lvlStyle: Record<Level, { c: string; Icon: LucideIcon; tc: string }> = {
+  Faible: { c: "bg-[#e0ecff] text-[#1255d6]", Icon: Bell, tc: "text-[#1255d6]" },
+  Moyen: { c: "bg-[#fff0d9] text-[#f59e0b]", Icon: AlertTriangle, tc: "text-[#d97706]" },
+  Élevé: { c: "bg-[#ffe3e3] text-[#e5342f]", Icon: AlertTriangle, tc: "text-[#e5342f]" },
+};
 
+// Code météo Open-Meteo -> libellé + icône
+const wmo = (c: number): { label: string; Icon: LucideIcon } => {
+  if (c <= 1) return { label: "Ciel dégagé", Icon: Sun };
+  if (c === 2) return { label: "Peu nuageux", Icon: CloudSun };
+  if (c === 3) return { label: "Nuageux", Icon: Cloud };
+  if (c === 45 || c === 48) return { label: "Brouillard", Icon: CloudFog };
+  if (c >= 95) return { label: "Orage", Icon: CloudLightning };
+  return { label: "Pluie", Icon: CloudRain };
+};
+const compass = (deg: number) => ["N", "NE", "E", "SE", "S", "SO", "O", "NO"][Math.round(deg / 45) % 8];
 
 const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [revenuePeriod, setRevenuePeriod] = useState("mensuelle");
   const [revenueDataSets, setRevenueDataSets] = useState<RevenueDataSets>(revenueDataSetsVoid);
+  const [weather, setWeather] = useState<Weather | null>(null);
+  const [weatherErr, setWeatherErr] = useState(false);
+  const [insight, setInsight] = useState<Insight | null>(null);
+  const [aiBusy, setAiBusy] = useState(false);
 
   const cashMouvement = useSelector((state: RootState) => state.stJude.cashMouvement);
   const trip = useSelector((state: RootState) => state.stJude.trip);
   const reservation = useSelector((state: RootState) => state.stJude.reservation);
+  const boats = useSelector((state: RootState) => ((state.stJude as any).boat ?? (state.stJude as any).boats ?? []) as any[]);
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
 
   useEffect(() => {
     setRevenueDataSets(generateRevenueDataSets(cashMouvement));
   }, [cashMouvement]);
 
+  // ---------- Données réelles
   const totalCredit = cashMouvement.reduce((a, { credit }) => a + Number(credit), 0);
   const totalDebit = cashMouvement.reduce((a, { debit }) => a + Number(debit), 0);
-
-  const stats = [
-    { title: "Total Crédit", value: formatCurrency(totalCredit), trend: "+12%", up: true, icon: TrendingUp, bg: "bg-[#0f9d78]" },
-    { title: "Total Débit", value: formatCurrency(totalDebit), trend: "-8%", up: false, icon: TrendingDown, bg: "bg-[#ef4444]" },
-    { title: "Solde net", value: formatCurrency(totalCredit - totalDebit), trend: "+18%", up: true, icon: Calculator, bg: "bg-[#7c3aed]" },
-    { title: "Nombre de voyages", value: String(trip.length), trend: "Aucun changement", up: true, icon: Ship, bg: "bg-[#1d6fe0]", flat: true },
-    { title: "Marchandises transportées", value: "248,5 tonnes", trend: "+15%", up: true, icon: Package, bg: "bg-[#f59e0b]", orange: true },
-  ];
-
-  const currentData = revenueDataSets[revenuePeriod as keyof typeof revenueDataSets] || revenueDataSets.mensuelle;
-  const revNumbers = currentData.map((d: any) => Number(d.revenus));
-  const revTotal = revNumbers.reduce((s: number, v: number) => s + v, 0);
-  const revAvg = revNumbers.length ? revTotal / revNumbers.length : 0;
-  const revBest = currentData.reduce((b: any, d: any) => (b && Number(b.revenus) >= Number(d.revenus) ? b : d), null as any);
-
+  const solde = totalCredit - totalDebit;
   const paid = reservation.reduce((a, { amountPaid }) => a + Number(amountPaid), 0);
   const unpaid = reservation.reduce((a, { amountToPay }) => a + Number(amountToPay), 0);
+  const payTotal = paid + unpaid;
+  const cancelled = reservation.filter((r: any) => r.status === "Annulée").length;
+  const unpaidCount = reservation.filter((r) => Number(r.amountToPay) > 0).length;
+
+  const currentData: any[] = (revenueDataSets[revenuePeriod as keyof typeof revenueDataSets] || revenueDataSets.mensuelle) as any[];
+  const revNumbers = currentData.map((d) => Number(d.revenus));
+  const revTotal = revNumbers.reduce((s, v) => s + v, 0);
+  const revAvg = revNumbers.length ? revTotal / revNumbers.length : 0;
+  const revBest = currentData.reduce((b, d) => (b && Number(b.revenus) >= Number(d.revenus) ? b : d), null as any);
+
+  // Prévision : régression linéaire sur la série réelle des revenus
+  const forecast = useMemo(() => {
+    const n = revNumbers.length;
+    if (n < 2) return { data: currentData.map((d) => ({ periode: d.periode, reel: Number(d.revenus) })), next: null as number | null };
+    const xs = revNumbers.map((_, i) => i);
+    const mx = xs.reduce((a, b) => a + b, 0) / n;
+    const my = revNumbers.reduce((a, b) => a + b, 0) / n;
+    const slope = xs.reduce((s, x, i) => s + (x - mx) * (revNumbers[i] - my), 0) / (xs.reduce((s, x) => s + (x - mx) ** 2, 0) || 1);
+    const next = Math.max(0, my + slope * (n - mx));
+    const data: any[] = currentData.map((d, i) => ({ periode: d.periode, reel: revNumbers[i], prevision: i === n - 1 ? revNumbers[i] : undefined }));
+    data.push({ periode: "Prévision", prevision: Number(next.toFixed(1)) });
+    return { data, next };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [revNumbers.join(","), revenuePeriod]);
+
+  const boatName = (b: any) => b.name ?? b.nom ?? b.matricule ?? "Bateau";
+  const boatState = (b: any) => String(b.state ?? b.etat ?? b.status ?? b.statut ?? "—");
+
+  // Alertes locales calculées sur les vraies données (repli si l'IA est indisponible)
+  const localAlerts = useMemo<Alert[]>(() => {
+    const out: Alert[] = [];
+    if (unpaidCount > 0) out.push({ t: "Paiements en attente", s: `${unpaidCount} réservation(s) avec un solde à payer — ${formatCurrency(unpaid)}`, lvl: "Moyen" });
+    boats.filter((b) => /maint/i.test(boatState(b))).forEach((b) => out.push({ t: "Bateau en maintenance", s: boatName(b), lvl: "Moyen" }));
+    if (solde < 0) out.push({ t: "Solde net négatif", s: `Débit supérieur au crédit de ${formatCurrency(Math.abs(solde))}`, lvl: "Élevé" });
+    return out.slice(0, 4);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unpaidCount, unpaid, boats, solde]);
+
+  // ---------- Analyse IA des données réelles
+  const signature = `${cashMouvement.length}-${reservation.length}-${trip.length}-${boats.length}-${totalCredit}-${totalDebit}`;
+  useEffect(() => {
+    if (!cashMouvement.length && !reservation.length && !trip.length) return;
+    let off = false;
+    setAiBusy(true);
+    const data = {
+      credit: totalCredit, debit: totalDebit, solde, voyages: trip.length, reservations: reservation.length,
+      annulees: cancelled, montantPaye: paid, montantNonPaye: unpaid, reservationsAvecSolde: unpaidCount,
+      revenusRecents: revNumbers.slice(-6), bateaux: boats.map((b) => ({ nom: boatName(b), etat: boatState(b) })),
+    };
+    const prompt = `Tu es l'IA d'analyse de SAINT-JUDE (transport maritime, Madagascar, montants en Ar). Données réelles: ${JSON.stringify(data)}.
+Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phrases maximum","alertes":[{"titre":"","detail":"","niveau":"Faible|Moyen|Élevé"}]}. 4 alertes maximum. N'invente aucune donnée absente.`;
+    askAIJson<{ analyse: string; prevision: string; alertes: { titre: string; detail: string; niveau: string }[] }>(prompt).then((r) => {
+      if (off) return;
+      if (r && typeof r.analyse === "string") {
+        setInsight({
+          analyse: r.analyse,
+          prevision: r.prevision ?? "",
+          alertes: (r.alertes ?? []).slice(0, 4).map((a) => ({ t: a.titre, s: a.detail, lvl: (["Faible", "Moyen", "Élevé"].includes(a.niveau) ? a.niveau : "Moyen") as Level })),
+        });
+      } else setInsight(null);
+      setAiBusy(false);
+    });
+    return () => { off = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature]);
+
+  const alerts = insight && insight.alertes.length ? insight.alertes : localAlerts;
+
+  // ---------- Météo réelle (Open-Meteo, Toamasina)
+  useEffect(() => {
+    let off = false;
+    (async () => {
+      try {
+        const lat = -18.1492, lon = 49.4023;
+        const [f, m] = await Promise.all([
+          fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,visibility&daily=weather_code,temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=4`).then((r) => r.json()),
+          fetch(`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=wave_height`).then((r) => r.json()).catch(() => null),
+        ]);
+        if (off) return;
+        const w = wmo(f.current.weather_code);
+        setWeather({
+          temp: Math.round(f.current.temperature_2m), label: w.label, Icon: w.Icon,
+          wind: `${Math.round(f.current.wind_speed_10m)} km/h (${compass(f.current.wind_direction_10m)})`,
+          humidity: Math.round(f.current.relative_humidity_2m), visibility: Math.round((f.current.visibility ?? 0) / 1000),
+          wave: m?.current?.wave_height ?? null,
+          days: [1, 2, 3].map((i) => {
+            const x = wmo(f.daily.weather_code[i]);
+            const dt = new Date(f.daily.time[i]);
+            return { d: dt.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit" }), t: `${Math.round(f.daily.temperature_2m_min[i])}° / ${Math.round(f.daily.temperature_2m_max[i])}°`, label: x.label, Icon: x.Icon };
+          }),
+        });
+      } catch {
+        if (!off) setWeatherErr(true);
+      }
+    })();
+    return () => { off = true; };
+  }, []);
+
   const paymentData = [
     { name: "Frais payés", value: paid, color: "#2563eb" },
     { name: "Frais non payés", value: unpaid, color: "#ef4444" },
   ];
-  const payTotal = paid + unpaid;
 
-  // --- Données de démonstration (à brancher sur l'API plus tard)
-  const boats = [
-    { name: "Eric", status: "En route", color: "text-green-600", info: ["Lat : -18.15  Lon : 49.40", "Vitesse : 12 nds", "ETA : 21 juin 2025"] },
-    { name: "Arcanum", status: "En maintenance", color: "text-orange-500", info: ["Lat : -17.02  Lon : 49.10", "Vitesse : 0 nds", "ETA : -"] },
+  const stats = [
+    { title: "Total Crédit", value: formatCurrency(totalCredit), sub: "Total encaissé", icon: TrendingUp, bg: "bg-[#0f9d78]" },
+    { title: "Total Débit", value: formatCurrency(totalDebit), sub: "Total dépensé", icon: TrendingDown, bg: "bg-[#ef4444]" },
+    { title: "Solde net", value: formatCurrency(solde), sub: "Crédit − Débit", icon: Calculator, bg: "bg-[#7c3aed]" },
+    { title: "Nombre de voyages", value: String(trip.length), sub: "Voyages enregistrés", icon: Ship, bg: "bg-[#1d6fe0]" },
+    { title: "Réservations", value: String(reservation.length), sub: `dont ${cancelled} annulée(s)`, icon: ClipboardList, bg: "bg-[#f59e0b]", orange: true },
   ];
-  const forecast = [
-    { d: "Mar 27/05", t: "27° / 31°", l: "Pluie légère", i: CloudRain },
-    { d: "Mer 28/05", t: "26° / 30°", l: "Peu nuageux", i: Cloud },
-    { d: "Jeu 29/05", t: "25° / 29°", l: "Risque de pluie", i: CloudRain },
-  ];
-  const alerts = [
-    { t: "Paiement en retard", s: "Client #003 - 120 000 Ar", h: "Aujourd'hui 10:24", c: "bg-[#ffe3e3] text-[#e5342f]", i: AlertTriangle, tc: "text-[#e5342f]" },
-    { t: "Bateau en maintenance", s: "Arcanum - Intervention prévue sous 2 jours", h: "Aujourd'hui 09:15", c: "bg-[#e0ecff] text-[#1255d6]", i: Wrench, tc: "text-[#1255d6]" },
-    { t: "Risque de météo défavorable", s: "Vent fort prévu à Toamasina", h: "Hier 16:32", c: "bg-[#fff0d9] text-[#f59e0b]", i: Wind, tc: "text-[#f59e0b]" },
-    { t: "Nouvelle réservation", s: "Client #048 - 450 000 Ar", h: "Hier 14:20", c: "bg-[#ffe3e3] text-[#e5342f]", i: Bell, tc: "text-[#e5342f]" },
-  ];
-  const forecastLine = useMemo(
-    () => [{ m: "Juin", v: 10 }, { m: "Juil.", v: 14 }, { m: "Août", v: 17 }, { m: "Sept.", v: 24 }].map((x) => x),
-    []
-  );
 
   const now = new Date();
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -104,7 +205,7 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
         )}
         <div className="relative w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
           <Bell size={18} />
-          <span className="absolute -top-1 -right-1 bg-[#e5342f] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">3</span>
+          {alerts.length > 0 && <span className="absolute -top-1 -right-1 bg-[#e5342f] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">{alerts.length}</span>}
         </div>
         <div className="flex items-center gap-2 bg-white border border-[#dbe5f5] rounded-full pl-1 pr-3 py-1">
           <div className="w-8 h-8 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={18} /></div>
@@ -127,24 +228,18 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
               <div className="min-w-0">
                 <p className={`text-xs font-semibold ${s.orange ? "text-[#f59e0b]" : ""}`}>{s.title}</p>
                 <p className={`text-2xl font-extrabold leading-tight truncate ${s.orange ? "text-[#f59e0b]" : "text-[#1255d6]"}`}>{s.value}</p>
-                <p className={`text-[11px] font-semibold flex items-center gap-1 ${s.flat ? "text-[#1255d6]" : s.up ? "text-green-600" : "text-red-600"}`}>
-                  {s.flat ? <ArrowRight size={12} /> : s.up ? "↗" : "↘"} {s.trend}
-                  {!s.flat && <span className="text-gray-500 font-normal">vs mois précédent</span>}
-                </p>
+                <p className="text-[11px] text-gray-500">{s.sub}</p>
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Ligne 1 : revenus, paiements, GPS, météo */}
+      {/* Ligne 1 : revenus, paiements, bateaux, météo */}
       <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_1fr_0.95fr_0.95fr] gap-3">
         <div className={`${card} p-4`}>
           <div className="flex items-start justify-between">
-            <div>
-              <h3 className="font-bold">Évolution des Revenus</h3>
-              <p className="text-[11px] text-gray-500">En milliers d'Ar</p>
-            </div>
+            <div><h3 className="font-bold">Évolution des Revenus</h3><p className="text-[11px] text-gray-500">En milliers d'Ar</p></div>
             <select value={revenuePeriod} onChange={(e) => setRevenuePeriod(e.target.value)} className="border rounded-md text-xs px-2 py-1 bg-[#f8fafd]">
               <option value="hebdomadaire">Hebdomadaire</option>
               <option value="mensuelle">Mensuelle</option>
@@ -180,8 +275,8 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
             <div className="relative w-[190px] h-[210px] shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={paymentData} dataKey="value" innerRadius={55} outerRadius={85} stroke="#fff">
-                    {paymentData.map((e) => <Cell key={e.name} fill={e.color} />)}
+                  <Pie data={payTotal ? paymentData : [{ name: "Aucune donnée", value: 1, color: "#e5ebf5" }]} dataKey="value" innerRadius={55} outerRadius={85} stroke="#fff">
+                    {(payTotal ? paymentData : [{ name: "Aucune donnée", value: 1, color: "#e5ebf5" }]).map((e) => <Cell key={e.name} fill={e.color} />)}
                   </Pie>
                   <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} Ar`, "Montant"]} />
                 </PieChart>
@@ -204,75 +299,72 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
         </div>
 
         <div className={`${card} p-4`}>
-          <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi GPS des Bateaux</h3>
-          <p className="text-[11px] text-gray-500 mb-2">Position en temps réel</p>
-          <div className="grid grid-cols-[1fr_1.1fr] gap-2">
-            <div className="relative rounded-lg bg-gradient-to-br from-[#cfe6fb] to-[#e8f3e0] h-[190px] overflow-hidden border">
-              <MapPin size={18} className="absolute top-12 left-[55%] text-[#e5342f]" />
-              <span className="absolute top-8 left-[40%] text-[9px]">Antsiranana</span>
-              <MapPin size={18} className="absolute bottom-16 left-[60%] text-[#1255d6]" />
-              <span className="absolute bottom-10 left-[50%] text-[9px]">Toamasina</span>
-            </div>
-            <div className="space-y-2">
-              {boats.map((b) => (
-                <div key={b.name} className="border rounded-lg p-2 text-[10px] bg-[#f8fafd]">
-                  <p className="font-bold text-xs flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-[#1255d6] inline-block" />{b.name}</p>
-                  <p className={`${b.color} font-semibold`}>{b.status}</p>
-                  {b.info.map((l) => <p key={l} className="text-gray-600">{l}</p>)}
+          <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi des Bateaux</h3>
+          <p className="text-[11px] text-gray-500 mb-2">État de la flotte</p>
+          <div className="space-y-2 max-h-[230px] overflow-y-auto">
+            {boats.length === 0 && <p className="text-xs text-gray-500 py-6 text-center">Aucun bateau enregistré.</p>}
+            {boats.map((b, i) => {
+              const st = boatState(b);
+              const ok = /(dispo|service|route|actif)/i.test(st);
+              const maint = /maint/i.test(st);
+              return (
+                <div key={i} className="border rounded-lg p-2.5 text-[11px] bg-[#f8fafd] flex items-center gap-2">
+                  <MapPin size={16} className={maint ? "text-orange-500" : ok ? "text-green-600" : "text-[#1255d6]"} />
+                  <div className="flex-1">
+                    <p className="font-bold text-xs">{boatName(b)}</p>
+                    <p className={`font-semibold ${maint ? "text-orange-500" : ok ? "text-green-600" : "text-gray-600"}`}>{st}</p>
+                  </div>
+                  {b.capacity != null && <span className="text-gray-500">{b.capacity} t</span>}
                 </div>
-              ))}
-            </div>
-          </div>
-          <div className="flex gap-3 text-[10px] mt-2">
-            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-green-500 inline-block" />Bateau en route</span>
-            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-red-500 inline-block" />Bateau à l'arrêt</span>
+              );
+            })}
           </div>
         </div>
 
         <div className={`${card} p-4`}>
           <h3 className="font-bold flex items-center gap-2"><Cloud size={16} className="text-[#1255d6]" /> Météo & Conditions Maritimes</h3>
           <p className="text-[11px] text-gray-500">Toamasina – Aujourd'hui</p>
-          <div className="flex items-center gap-3 my-3">
-            <Cloud size={46} className="text-[#f59e0b]" />
-            <div><p className="text-3xl font-extrabold">28°C</p><p className="text-[11px]">Ciel nuageux</p></div>
-            <ul className="text-[10px] space-y-1 ml-auto">
-              <li className="flex items-center gap-1"><Wind size={11} />Vent <b>12 km/h (E)</b></li>
-              <li className="flex items-center gap-1"><Waves size={11} />Mer <b>1,2 m</b></li>
-              <li className="flex items-center gap-1"><Droplets size={11} />Humidité <b>78%</b></li>
-              <li className="flex items-center gap-1"><Eye size={11} />Visibilité <b>10 km</b></li>
-            </ul>
-          </div>
-          <div className="grid grid-cols-3 gap-1.5">
-            {forecast.map((f) => {
-              const Icon = f.i;
-              return (
-                <div key={f.d} className="border rounded-md p-1.5 text-center text-[9px] bg-[#f8fafd]">
-                  <p className="font-semibold">{f.d}</p><Icon size={16} className="mx-auto my-1 text-[#1255d6]" /><p>{f.t}</p><p className="text-gray-500">{f.l}</p>
-                </div>
-              );
-            })}
-          </div>
-          <button className="mt-3 ml-auto flex items-center gap-1 bg-[#1255d6] text-white text-[11px] font-semibold px-3 py-1.5 rounded-md">Voir la météo complète <ArrowRight size={12} /></button>
+          {!weather && <p className="text-xs text-gray-500 py-10 text-center">{weatherErr ? "Météo indisponible (connexion)." : "Chargement de la météo…"}</p>}
+          {weather && (
+            <>
+              <div className="flex items-center gap-3 my-3">
+                <weather.Icon size={46} className="text-[#f59e0b]" />
+                <div><p className="text-3xl font-extrabold">{weather.temp}°C</p><p className="text-[11px]">{weather.label}</p></div>
+                <ul className="text-[10px] space-y-1 ml-auto">
+                  <li className="flex items-center gap-1"><Wind size={11} />Vent <b>{weather.wind}</b></li>
+                  <li className="flex items-center gap-1"><Waves size={11} />Mer <b>{weather.wave != null ? `${weather.wave.toFixed(1).replace(".", ",")} m` : "—"}</b></li>
+                  <li className="flex items-center gap-1"><Droplets size={11} />Humidité <b>{weather.humidity}%</b></li>
+                  <li className="flex items-center gap-1"><Eye size={11} />Visibilité <b>{weather.visibility} km</b></li>
+                </ul>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                {weather.days.map((f) => (
+                  <div key={f.d} className="border rounded-md p-1.5 text-center text-[9px] bg-[#f8fafd]">
+                    <p className="font-semibold capitalize">{f.d}</p><f.Icon size={16} className="mx-auto my-1 text-[#1255d6]" /><p>{f.t}</p><p className="text-gray-500">{f.label}</p>
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </div>
 
-      {/* Ligne 2 : analytics, data science, alertes */}
+      {/* Ligne 2 : analytics, prévisions IA, alertes */}
       <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.35fr_1fr] gap-3">
         <div className={`${card} p-4`}>
           <div className="flex items-center gap-3 mb-3">
             <div className="w-9 h-9 rounded-xl bg-[#1255d6] text-white flex items-center justify-center"><BarChart3 size={18} /></div>
             <div className="flex-1"><h3 className="font-bold text-sm">Data Analytics</h3><p className="text-[11px] text-gray-500">— Indicateurs clés</p></div>
-            <select className="border rounded-md text-[11px] px-2 py-1"><option>6 derniers mois</option></select>
           </div>
           <div className="grid grid-cols-2 gap-2 text-[11px]">
             {[
-              ["Taux d'occupation", "68%", "↗ +12%", "text-green-600"],
-              ["Panier moyen", "245 000 Ar", "↘ +8%", "text-red-500"],
-              ["Nbre de réservations", String(reservation.length), "↗ +15%", "text-green-600"],
-              ["Taux d'annulation", "6%", "↘ -2%", "text-green-600"],
-            ].map(([l, v, t, c]) => (
+              ["Taux de paiement", payTotal ? `${Math.round((paid / payTotal) * 100)}%` : "—"],
+              ["Panier moyen", reservation.length ? formatCurrency(payTotal / reservation.length) : "—"],
+              ["Nbre de réservations", String(reservation.length)],
+              ["Taux d'annulation", reservation.length ? `${Math.round((cancelled / reservation.length) * 100)}%` : "—"],
+            ].map(([l, v]) => (
               <div key={l} className="border rounded-lg p-2.5 bg-[#f8fafd]">
-                <p className="text-gray-600">{l}</p><p className="text-lg font-extrabold">{v}</p><p className={`${c} font-semibold`}>{t}</p>
+                <p className="text-gray-600">{l}</p><p className="text-lg font-extrabold">{v}</p>
               </div>
             ))}
           </div>
@@ -281,23 +373,20 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
         <div className={`${card} p-4`}>
           <div className="flex items-center gap-3 mb-2">
             <div className="w-9 h-9 rounded-xl bg-[#7c3aed] text-white flex items-center justify-center"><Brain size={18} /></div>
-            <h3 className="font-bold text-sm">Data Science <span className="text-gray-500 font-normal">— Prévisions & Anomalies</span></h3>
+            <h3 className="font-bold text-sm flex-1">Data Science <span className="text-gray-500 font-normal">— Prévisions & Anomalies</span></h3>
+            <span className="text-[10px] text-gray-500">{aiBusy ? "Analyse IA en cours…" : insight ? "Analyse IA" : "Calcul local"}</span>
           </div>
-          <div className="grid grid-cols-[1fr_1.2fr] gap-3">
-            <div className="grid grid-cols-1 gap-2 text-[11px]">
-              <div className="grid grid-cols-3 gap-2 col-span-1">
-                {[["Recettes (30j)", "512 Mille Ar", "+14%"], ["Marchandises (30j)", "320 t", "+11%"], ["Carburant (30j)", "12 500 L", "+6%"]].map(([l, v, t]) => (
-                  <div key={l} className="border rounded-lg p-2 bg-[#f8fafd] col-span-1">
-                    <p className="text-gray-600 text-[10px]">{l}</p><p className="font-extrabold text-xs">{v}</p><p className="text-green-600 font-semibold">↗ {t}</p>
-                  </div>
-                ))}
-              </div>
+          <div className="grid grid-cols-[1fr_1.1fr] gap-3">
+            <div className="text-[11px] space-y-2">
+              <p className="text-gray-700">{insight?.analyse || (revNumbers.length ? `Revenu total sur la période : ${revTotal.toFixed(1)} Mille Ar.` : "Pas assez de données pour analyser.")}</p>
+              <p className="text-gray-700">{insight?.prevision || (forecast.next != null ? `Tendance : prochain point estimé à ${forecast.next.toFixed(1)} Mille Ar (régression linéaire).` : "")}</p>
             </div>
-            <ResponsiveContainer width="100%" height={110}>
-              <AreaChart data={forecastLine}>
-                <defs><linearGradient id="gF" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#1d6fe0" stopOpacity={0.25} /><stop offset="95%" stopColor="#1d6fe0" stopOpacity={0} /></linearGradient></defs>
-                <XAxis dataKey="m" tick={{ fontSize: 9 }} />
-                <Area type="monotone" dataKey="v" stroke="#1d6fe0" strokeWidth={2} fill="url(#gF)" />
+            <ResponsiveContainer width="100%" height={120}>
+              <AreaChart data={forecast.data}>
+                <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
+                <RechartsTooltip />
+                <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
+                <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="none" name="Prévision" />
               </AreaChart>
             </ResponsiveContainer>
           </div>
@@ -306,16 +395,16 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
         <div className={`${card} p-4`}>
           <div className="flex items-center justify-between mb-2">
             <h3 className="font-bold text-sm flex items-center gap-2"><Bell size={16} className="text-[#e5342f]" /> Alertes & Notifications</h3>
-            <span className="text-[10px] text-[#1255d6]">Voir tout</span>
+            <span className="text-[10px] text-gray-500">{insight && insight.alertes.length ? "IA" : "Calcul local"}</span>
           </div>
-          <ul className="space-y-2">
-            {alerts.map((a) => {
-              const Icon = a.i;
+          <ul className="space-y-2.5">
+            {alerts.length === 0 && <li className="text-xs text-gray-500 py-4 text-center">Aucune alerte pour le moment.</li>}
+            {alerts.map((a, i) => {
+              const { c, Icon, tc } = lvlStyle[a.lvl];
               return (
-                <li key={a.t} className="flex items-start gap-2 text-[11px]">
-                  <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${a.c}`}><Icon size={14} /></span>
-                  <div className="flex-1"><p className={`font-semibold ${a.tc}`}>{a.t}</p><p className="text-gray-600">{a.s}</p></div>
-                  <span className="text-[10px] text-gray-500 whitespace-nowrap">{a.h}</span>
+                <li key={i} className="flex items-start gap-2 text-[11px]">
+                  <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${c}`}><Icon size={14} /></span>
+                  <div className="flex-1"><p className={`font-semibold ${tc}`}>{a.t}</p><p className="text-gray-600">{a.s}</p></div>
                 </li>
               );
             })}
@@ -329,8 +418,8 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
         {[
           [Lock, "Sécurité des données", "Chiffrement & sauvegarde"],
           [Brain, "IA & Analytics", "Des décisions plus éclairées"],
-          [MapPin, "GPS & Cartographie", "Suivi en temps réel des bateaux"],
-          [Fuel, "Météo Marine", "Navigation sécurisée"],
+          [Fuel, "Carburant", "Suivi de consommation"],
+          [Wrench, "Maintenance", "Flotte sous surveillance"],
         ].map(([I, t, s]: any) => (
           <div key={t} className="flex items-center gap-2"><I size={22} className="text-[#1255d6]" /><div><p className="font-semibold">{t}</p><p className="text-gray-500 text-[10px]">{s}</p></div></div>
         ))}
