@@ -1,482 +1,383 @@
-import React, { useEffect, useState } from "react";
-import { useSelector, useDispatch } from "react-redux";
-import { RootState, AppDispatch } from "../redux/index";
-import { InputField } from "./tools/InputField";
-import { Label } from "./ui/label";
+import { FC, useMemo, useState } from "react";
 import {
-  fetchPersonnels,
-  addPersonnel,
-  updatePersonnel,
-  deletePersonnel,
-} from "../redux/feature/users";
-import { addRoleWithPermissions, removeRole } from "../redux/feature/roles";
-import { updateRolePermissions } from "../redux/feature/roles";
-import { permissionLabels } from "../data/type";
-import { User, Permission } from "../data/type";
-import { v4 as uuidv4 } from "uuid";
-import { Input } from "./ui/input";
-import { Select, SelectTrigger, SelectValue, SelectContent, SelectItem } from "./ui/select";
-import { Button } from "./ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogClose } from "./ui/dialog";
-import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "./ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table';
-import { Edit, Trash, Plus, Search, Filter, Users } from "lucide-react";
+  Search, Bell, ChevronDown, Calendar, Users, User, Anchor, Settings, ShieldCheck, Plus, Check, Clock, AlertCircle,
+  Filter, Download, Eye, Pencil, Trash2, ArrowRight, ChevronLeft, ChevronRight, X, UserCircle2,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
+import { useSelector } from "react-redux";
+import { RootState } from "../redux";
 
-const allPermissions: Permission[] = [
-  "dashboard:read",
-  "merchandise:manage",
-  "caisse:manage",
-  "boat:manage",
-  "trajets:manage",
-  "users:manage",
-  "profile:read",
-  "fueldManage:manage",
-];
+interface Props {
+  onAdd?: () => void;
+  onView?: (user: any) => void;
+  onEdit?: (user: any) => void;
+  onDelete?: (user: any) => void;
+}
 
-const PersonnelManagement = () => {
-  const dispatch = useDispatch<AppDispatch>();
-  const { allUser: personnels, loading, error } = useSelector(
-    (state: RootState) => state.users
+const PAGE = 5;
+const DAY = 86400000;
+const pad = (n: number) => String(n).padStart(2, "0");
+const fmt = (d: Date) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+const pick = (u: any, ...keys: string[]) => { for (const k of keys) if (u?.[k] !== undefined && u[k] !== null && u[k] !== "") return u[k]; return undefined; };
+
+type Kind = "admin" | "capitaine" | "gestionnaire" | "agent" | "autre";
+const kindOf = (role: string): Kind =>
+  /propri|admin/i.test(role) ? "admin" : /capitaine/i.test(role) ? "capitaine" : /gestion/i.test(role) ? "gestionnaire" : /agent/i.test(role) ? "agent" : "autre";
+const roleBadge: Record<Kind, string> = {
+  admin: "bg-[#dbe8ff] text-[#1d4fb8]", capitaine: "bg-[#d9f5e6] text-[#14894f]", gestionnaire: "bg-[#ffe9cc] text-[#d97706]",
+  agent: "bg-[#ece3ff] text-[#6a43d6]", autre: "bg-[#d6f3f6] text-[#0e8a98]",
+};
+type St = "present" | "conge" | "absent" | null;
+const stOf = (s: any): St => {
+  if (!s) return null;
+  const v = String(s);
+  if (/cong/i.test(v)) return "conge";
+  if (/abs|inactif|inactive|suspend/i.test(v)) return "absent";
+  if (/actif|active|pr[ée]sent/i.test(v)) return "present";
+  return null;
+};
+const stBadge: Record<string, string> = { present: "bg-[#d9f5e6] text-[#14894f]", conge: "bg-[#ffe9cc] text-[#d97706]", absent: "bg-[#ffe3e3] text-[#d02925]" };
+const stLabel: Record<string, string> = { present: "Actif", conge: "Congé", absent: "Absent" };
+
+const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
+  const allUser = useSelector((state: RootState) => state.users.allUser) as any[];
+  const currentUser = useSelector((state: RootState) => state.users.currentUser);
+
+  const [search, setSearch] = useState("");
+  const [roleF, setRoleF] = useState("");
+  const [statF, setStatF] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [applied, setApplied] = useState({ search: "", role: "", stat: "", from: "", to: "" });
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [detail, setDetail] = useState<any | null>(null);
+
+  // ---------- Normalisation des vrais utilisateurs
+  const people = useMemo(
+    () =>
+      (allUser ?? []).map((u) => {
+        const role = String(pick(u, "role") ?? "—");
+        const hireRaw = pick(u, "hireDate", "dateEmbauche", "hiredAt", "createdAt");
+        const hire = hireRaw ? new Date(hireRaw) : null;
+        return {
+          raw: u,
+          id: String(pick(u, "_id", "id") ?? `${u.name}-${u.lastName}`),
+          name: `${u.name ?? ""} ${u.lastName ?? ""}`.trim() || "—",
+          email: pick(u, "email", "mail") ?? "—",
+          phone: pick(u, "phone", "telephone", "tel", "phoneNumber", "contact") ?? "—",
+          photo: pick(u, "photo", "image", "avatar", "picture") as string | undefined,
+          role, kind: kindOf(role), status: stOf(pick(u, "status", "statut", "state")),
+          hire: hire && !isNaN(hire.getTime()) ? hire : null,
+        };
+      }),
+    [allUser]
   );
-  const currentUser = useSelector(
-    (state: RootState) => state.users.currentUser
-  );
 
-  const rolesState = useSelector((state: RootState) => state.roles);
+  const total = people.length;
+  const count = (k: Kind) => people.filter((p) => p.kind === k).length;
+  const cap = count("capitaine"), gest = count("gestionnaire"), agent = count("agent");
+  const others = total - cap - gest - agent;
+  const hasDates = people.some((p) => p.hire);
+  const weekly = (list: typeof people) => list.filter((p) => p.hire && Date.now() - p.hire.getTime() < 7 * DAY).length;
+  const pct = (n: number) => (total ? Math.round((n / total) * 100) : 0);
 
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterRole, setFilterRole] = useState("all");
-  const [showForm, setShowForm] = useState(false);
-  const [editPersonnel, setEditPersonnel] = useState<User | null>(null);
-  const [formData, setFormData] = useState<User>({
-    id: uuidv4(),
-    name: "",
-    lastName: "",
-    password: "",
-    email: "",
-    tel: "",
-    role: "Agent",
-  });
+  const sub = (list: typeof people) => {
+    if (!hasDates) return null;
+    const n = weekly(list);
+    return n > 0 ? { text: `+ ${n} cette semaine`, up: true } : { text: "Stable", up: false };
+  };
 
-  // Modal pour ajouter un rôle personnalisé
-  const [isAddingRole, setIsAddingRole] = useState(false);
-  const [newRole, setNewRole] = useState("");
-  const [selectedPermissions, setSelectedPermissions] = useState<Permission[]>([]);
-
-  //Etat pour le modal de modification des permissions
-  const [isEditingRole, setIsEditingRole] = useState(false);
-  const [editingRole, setEditingRole] = useState<string>("");
-  const [editingRolePermissions, setEditingRolePermissions] = useState<Permission[]>([]);
-
-  useEffect(() => {
-    dispatch(fetchPersonnels());
-  }, [dispatch]);
-
-  const filteredPersonnels = personnels.filter((personnel) => {
-    const matchesSearch =
-      personnel.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      personnel.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      personnel.email.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesRole =
-      filterRole === "all" || personnel.role === filterRole;
-    return matchesSearch && matchesRole;
-  });
-
-  const statsData = [
-    { name: "Total", value: personnels.length, color: "#2563eb" },
-    { name: "Capitaines", value: personnels.filter(p => p.role === "Capitaine").length, color: "#3b82f6" },
-    { name: "Gestionnaires", value: personnels.filter(p => p.role === "Gestionnaire").length, color: "#06b6d4" },
-    { name: "Agents", value: personnels.filter(p => p.role === "Agent").length, color: "#6366f1" },
+  const cards: { label: string; value: number; Icon: LucideIcon; tint: string; icon: string; s: ReturnType<typeof sub> }[] = [
+    { label: "Total", value: total, Icon: Users, tint: "from-[#eaf5ff] to-white border-[#bfe0fb]", icon: "bg-[#2aa3f0]", s: sub(people) },
+    { label: "Capitaines", value: cap, Icon: Anchor, tint: "from-[#eafaf1] to-white border-[#bfe8d1]", icon: "bg-[#12a66a]", s: sub(people.filter((p) => p.kind === "capitaine")) },
+    { label: "Gestionnaires", value: gest, Icon: Settings, tint: "from-[#fff4e8] to-white border-[#fad7aa]", icon: "bg-[#f59e0b]", s: sub(people.filter((p) => p.kind === "gestionnaire")) },
+    { label: "Agents", value: agent, Icon: User, tint: "from-[#f5eeff] to-white border-[#d9c6f7]", icon: "bg-[#8b3fd9]", s: sub(people.filter((p) => p.kind === "agent")) },
+    { label: "Autres rôles", value: others, Icon: ShieldCheck, tint: "from-[#e8f8f9] to-white border-[#b7e4e8]", icon: "bg-[#12a5b3]", s: sub(people.filter((p) => ["admin", "autre"].includes(p.kind))) },
   ];
 
-  const handleAdd = (user: User) => {
-    dispatch(addPersonnel(user));
-  };
-  const handleUpdate = (user: User) => {
-    dispatch(updatePersonnel(user));
-  };
-  const handleDelete = (id: string) => {
-    dispatch(deletePersonnel(id));
-  };
+  const pie = [
+    { name: "Capitaines", value: cap, color: "#0b84f3" },
+    { name: "Gestionnaires", value: gest, color: "#22b573" },
+    { name: "Agents", value: agent, color: "#f59e0b" },
+    { name: "Autres rôles", value: others, color: "#8b3fd9" },
+  ];
 
-  const canEdit = currentUser && currentUser.role === "Propriétaire";
-
-  const openAddForm = () => {
-    setEditPersonnel(null);
-    setFormData({
-      id: uuidv4(),
-      name: "",
-      lastName: "",
-      password: "",
-      email: "",
-      tel: "",
-      role: "Agent",
+  // Évolution des effectifs : cumul par mois (5 derniers mois) d'après la date d'embauche
+  const evolution = useMemo(() => {
+    if (!hasDates) return [];
+    return Array.from({ length: 5 }, (_, i) => {
+      const end = new Date();
+      end.setMonth(end.getMonth() - (4 - i) + 1, 0);
+      end.setHours(23, 59, 59, 999);
+      const upTo = people.filter((p) => p.hire && p.hire.getTime() <= end.getTime());
+      return {
+        m: end.toLocaleDateString("fr-FR", { month: "short" }).replace(".", ""),
+        total: upTo.length,
+        capitaines: upTo.filter((p) => p.kind === "capitaine").length,
+        agents: upTo.filter((p) => p.kind === "agent").length,
+      };
     });
-    setShowForm(true);
+  }, [people, hasDates]);
+
+  const statusKnown = people.some((p) => p.status);
+  const present = people.filter((p) => p.status === "present").length;
+  const conge = people.filter((p) => p.status === "conge").length;
+  const absent = people.filter((p) => p.status === "absent").length;
+
+  // ---------- Filtres + pagination
+  const roles = Array.from(new Set(people.map((p) => p.role)));
+  const filtered = useMemo(() => {
+    const q = applied.search.trim().toLowerCase();
+    return people.filter((p) => {
+      if (q && !`${p.name} ${p.email} ${p.phone} ${p.role}`.toLowerCase().includes(q)) return false;
+      if (applied.role && p.role !== applied.role) return false;
+      if (applied.stat && p.status !== applied.stat) return false;
+      if (applied.from && (!p.hire || p.hire.getTime() < new Date(applied.from).getTime())) return false;
+      if (applied.to && (!p.hire || p.hire.getTime() > new Date(applied.to).getTime() + DAY - 1)) return false;
+      return true;
+    });
+  }, [people, applied]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE));
+  const current = Math.min(page, pageCount);
+  const start = (current - 1) * PAGE;
+  const rows = filtered.slice(start, start + PAGE);
+  const pages = Array.from({ length: Math.min(3, pageCount) }, (_, i) => Math.max(1, Math.min(current - 1, pageCount - 2)) + i);
+  const onFilter = () => { setApplied({ search, role: roleF, stat: statF, from, to }); setPage(1); };
+
+  const exportCsv = () => {
+    const head = ["Nom", "Email", "Téléphone", "Rôle", "Statut", "Date d'embauche"];
+    const body = filtered.map((p) => [p.name, p.email, p.phone, p.role, p.status ? stLabel[p.status] : "", p.hire ? fmt(p.hire) : ""]);
+    const csv = [head, ...body].map((r) => r.map((c) => `"${String(c).replace(/"/g, '""')}"`).join(";")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url; a.download = "personnels.csv"; a.click();
+    URL.revokeObjectURL(url);
   };
 
-  const openEditForm = (personnel: User) => {
-    setEditPersonnel(personnel);
-    setFormData(personnel);
-    setShowForm(true);
+  const allChecked = rows.length > 0 && rows.every((p) => selected.includes(p.id));
+  const toggleAll = () => setSelected(allChecked ? selected.filter((id) => !rows.some((p) => p.id === id)) : Array.from(new Set([...selected, ...rows.map((p) => p.id)])));
+  const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+
+  const remove = (p: (typeof people)[number]) => {
+    if (onDelete && window.confirm(`Supprimer ${p.name} ?`)) onDelete(p.raw);
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (editPersonnel) {
-      handleUpdate(formData);
-    } else {
-      handleAdd({ ...formData, id: uuidv4() });
-    }
-    setShowForm(false);
-  };
-
-  const togglePermission = (perm: Permission) => {
-    setSelectedPermissions((prev) =>
-      prev.includes(perm) ? prev.filter((p) => p !== perm) : [...prev, perm]
-    );
-  };
-
-  const openEditRole = (role: string) => {
-    setEditingRole(role);
-    setEditingRolePermissions(rolesState.permissions[role] || []);
-    setIsEditingRole(true);
-  };
-
-  const toggleEditPermission = (perm: Permission) => {
-    setEditingRolePermissions(prev =>
-      prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]
-    );
-  };
-
-  const handleSaveRolePermissions = () => {
-    dispatch(updateRolePermissions({ role: editingRole, permissions: editingRolePermissions }));
-    setIsEditingRole(false);
-  };
-
-  const defaultRoles = ["Propriétaire", "Gestionnaire", "Capitaine", "Agent"];
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const initials = (n: string) => n.split(" ").map((x) => x[0]).slice(0, 2).join("").toUpperCase();
 
   return (
-    <div className="space-y-6">
-      <div className="w-full min-h-[100px] sticky z-50 border-b-2 py-4 px-2 top-0 bg-white flex items-center justify-between">
-        <div>
-          <h1 className="text-primary">Gestion des personnels</h1>
-          <p className="text-muted-foreground">
-            Gérez tous les personnels, leurs rôles et accès à la plateforme
-          </p>
+    <div className="bg-[#f3f7fd] min-h-full text-[#10285e]">
+      {/* Barre du haut */}
+      <div className="bg-white border-b border-[#e3eaf6] px-5 py-3 flex flex-wrap items-center gap-4">
+        <div className="relative flex-1 min-w-[260px] max-w-[440px]">
+          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#1255d6]" />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onFilter()}
+            placeholder="Rechercher un utilisateur, un rôle, une action..." className="w-full bg-[#eef3fb] rounded-lg pl-9 pr-3 py-2.5 text-xs" />
         </div>
-        {canEdit && (
-          <Button variant="default" onClick={openAddForm}>
-            <Plus className="h-4 w-4 mr-2" />Ajouter un personnel
-          </Button>
-        )}
+        <div className="ml-auto flex items-center gap-5">
+          <div className="relative"><Bell size={22} className="text-[#1255d6]" /></div>
+          <div className="flex items-center gap-2 border border-[#e3eaf6] rounded-lg pl-1.5 pr-3 py-1">
+            <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={20} /></div>
+            <span className="text-sm font-semibold">{currentUser?.role === "Propriétaire" ? "Administrateur" : currentUser?.name ?? "Administrateur"}</span>
+            <ChevronDown size={14} />
+          </div>
+          <div className="flex items-center gap-2 border border-[#e3eaf6] rounded-lg px-3 py-1.5 text-xs">
+            <Calendar size={22} className="text-[#1255d6]" />
+            <div><p className="capitalize">{dateLabel}</p><p>{pad(now.getHours())}:{pad(now.getMinutes())}</p></div>
+          </div>
+        </div>
       </div>
 
-      {/* Statistiques */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-        {statsData.map(stat => (
-          <Card key={stat.name} className="border-border hover:shadow-md transition-shadow p-4 text-center">
-            <CardHeader>
-              <CardTitle style={{ color: stat.color }}>{stat.value}</CardTitle>
-              <CardDescription>{stat.name}</CardDescription>
-            </CardHeader>
-          </Card>
-        ))}
-      </div>
+      <div className="p-5 space-y-4">
+        {/* Titre */}
+        <div className="flex items-center gap-4">
+          <div className="w-16 h-16 rounded-full bg-[#1255d6] text-white flex items-center justify-center shrink-0"><Users size={32} /></div>
+          <div className="mr-auto">
+            <h1 className="text-2xl font-extrabold text-[#0b3aa8]">Gestion des personnels</h1>
+            <p className="text-sm text-[#3e5788]">Gérez tous les personnels, leurs rôles et accès à la plateforme</p>
+          </div>
+          <button onClick={onAdd} className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-5 py-3 rounded-lg shadow">
+            <Plus size={18} /> Ajouter un personnel
+          </button>
+        </div>
 
-      {/* Formulaire modal */}
-      <Dialog open={showForm} onOpenChange={setShowForm}>
-        <DialogContent>
-          <form className="space-y-4" onSubmit={handleSubmit}>
-            <DialogHeader>
-              <DialogTitle>
-                {editPersonnel ? "Modifier" : "Ajouter"} un personnel
-              </DialogTitle>
-            </DialogHeader>
+        {/* Cartes */}
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+          {cards.map((c) => (
+            <div key={c.label} className={`rounded-xl border bg-gradient-to-br ${c.tint} p-4 flex gap-4 items-center`}>
+              <div className={`w-14 h-14 rounded-full ${c.icon} text-white flex items-center justify-center shrink-0`}><c.Icon size={26} /></div>
+              <div>
+                <p className="text-sm">{c.label}</p>
+                <p className="text-4xl font-extrabold leading-tight">{c.value}</p>
+                {c.s && <p className={`text-[11px] flex items-center gap-1 ${c.s.up ? "text-green-600" : "text-gray-500"}`}>{c.s.up ? "↗" : "—"} {c.s.text}</p>}
+              </div>
+            </div>
+          ))}
+        </div>
 
-            {/* Champ prénom */}
-            <InputField
-              label="Prénom"
-              value={formData.name}
-              onChange={(v) => setFormData({ ...formData, name: v })}
-            />
-
-            {/* Champ nom */}
-            <InputField
-              label="Nom"
-              value={formData.lastName}
-              onChange={(v) => setFormData({ ...formData, lastName: v })}
-            />
-
-            {/* Champ email */}
-            <InputField
-              label="Email"
-              type="email"
-              value={formData.email}
-              onChange={(v) => setFormData({ ...formData, email: v })}
-            />
-
-            {/* Champ téléphone */}
-            <InputField
-              label="Téléphone"
-              value={formData.tel}
-              onChange={(v) => setFormData({ ...formData, tel: v })}
-            />
-
-            {/* Select rôle */}
-            <div className="flex flex-col gap-1">
-              <Label>Rôle</Label>
-              <Select
-                value={formData.role}
-                onValueChange={(value) => {
-                  if (value === "Autres") {
-                    setIsAddingRole(true); // ouvre le champ pour ajouter
-                  } else {
-                    setFormData({ ...formData, role: value as User["role"] });
-                  }
-                }}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Rôle" />
-                </SelectTrigger>
-                <SelectContent>
-                  {rolesState.list.map((r) => (
-                    <div key={r} className="flex items-center justify-between">
-                      <SelectItem value={r}>{r}</SelectItem>
-                      <div className="flex gap-1">
-                        {/* Bouton Edit */}
-                        {!defaultRoles.includes(r) && canEdit && (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => openEditRole(r)}
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                        )}
-
-                        {/* Bouton Delete */}
-                        {!defaultRoles.includes(r) && canEdit && (
-                          <Button
-                            size="sm"
-                            variant="destructive" // style rouge si tu utilises shadcn/ui
-                            onClick={() => dispatch(removeRole(r))}
-                          >
-                            <Trash className="h-4 w-4" />
-                          </Button>
-                        )}
-                      </div>
-                    </div>
+        {/* Graphiques */}
+        <div className="grid grid-cols-1 xl:grid-cols-[1.05fr_1.1fr_0.95fr] gap-3">
+          <div className="bg-white rounded-xl border border-[#dbe5f5] p-5 shadow-sm">
+            <h3 className="font-bold flex items-center gap-2 mb-3"><Users size={18} className="text-[#1255d6]" /> Répartition des rôles</h3>
+            {total === 0 ? <p className="text-xs text-gray-500 py-16 text-center">Aucun personnel.</p> : (
+              <div className="flex items-center gap-4">
+                <div className="relative w-[190px] h-[190px] shrink-0">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart><Pie data={pie} dataKey="value" innerRadius={52} outerRadius={92} stroke="#fff">{pie.map((p) => <Cell key={p.name} fill={p.color} />)}</Pie></PieChart>
+                  </ResponsiveContainer>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                    <span className="text-2xl font-extrabold">{total}</span><span className="text-xs">personnels</span>
+                  </div>
+                </div>
+                <ul className="text-sm space-y-3 flex-1">
+                  {pie.map((p) => (
+                    <li key={p.name} className="flex items-center gap-2">
+                      <i className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: p.color }} />
+                      <span className="flex-1 text-[#0b3aa8]">{p.name}</span>
+                      <span className="text-gray-600">{p.value} ({pct(p.value)}%)</span>
+                    </li>
                   ))}
-                  <SelectItem value="Autres">
-                    <Plus className="h-4 w-4 mr-2" />Autres…
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+                </ul>
+              </div>
+            )}
+          </div>
+
+          <div className="bg-white rounded-xl border border-[#dbe5f5] p-5 shadow-sm">
+            <h3 className="font-bold flex items-center gap-2"><Users size={18} className="text-[#1255d6]" /> Évolution des effectifs</h3>
+            <div className="flex justify-center gap-4 text-[11px] my-2">
+              <span className="flex items-center gap-1"><i className="w-3 h-0.5 bg-[#1d8bf0] inline-block" />Total</span>
+              <span className="flex items-center gap-1"><i className="w-3 h-0.5 bg-[#22b573] inline-block" />Capitaines</span>
+              <span className="flex items-center gap-1"><i className="w-3 h-0.5 bg-[#f59e0b] inline-block" />Agents</span>
             </div>
+            {evolution.length === 0 ? <p className="text-xs text-gray-500 py-14 text-center">Dates d'embauche non renseignées.</p> : (
+              <ResponsiveContainer width="100%" height={190}>
+                <LineChart data={evolution}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" />
+                  <XAxis dataKey="m" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+                  <RTooltip />
+                  <Line type="monotone" dataKey="total" name="Total" stroke="#1d8bf0" strokeWidth={2} dot />
+                  <Line type="monotone" dataKey="capitaines" name="Capitaines" stroke="#22b573" strokeWidth={2} dot />
+                  <Line type="monotone" dataKey="agents" name="Agents" stroke="#f59e0b" strokeWidth={2} dot />
+                </LineChart>
+              </ResponsiveContainer>
+            )}
+          </div>
 
-            {/* Boutons */}
-            <DialogFooter>
-              <DialogClose asChild>
-                <Button
-                  variant="secondary"
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                >
-                  Annuler
-                </Button>
-              </DialogClose>
-              <Button type="submit">
-                {editPersonnel ? "Enregistrer" : "Ajouter"}
-              </Button>
-            </DialogFooter>
-          </form>
-        </DialogContent>
-      </Dialog>
+          <div className="bg-white rounded-xl border border-[#dbe5f5] p-5 shadow-sm">
+            <h3 className="font-bold flex items-center gap-2 mb-2"><Calendar size={18} className="text-[#1255d6]" /> Activité de l'équipe</h3>
+            {!statusKnown ? <p className="text-xs text-gray-500 py-14 text-center">Statuts non renseignés.</p> : (
+              <ul className="divide-y">
+                {[
+                  { l: "Présents aujourd'hui", n: present, Icon: Check, c: "bg-[#22b573]" },
+                  { l: "En congé", n: conge, Icon: Clock, c: "bg-[#f59e0b]" },
+                  { l: "Absents", n: absent, Icon: AlertCircle, c: "bg-[#e5342f]" },
+                ].map((a) => (
+                  <li key={a.l} className="flex items-center gap-3 py-4">
+                    <span className={`w-10 h-10 rounded-full ${a.c} text-white flex items-center justify-center`}><a.Icon size={20} /></span>
+                    <span className="flex-1 text-sm text-[#0b3aa8]">{a.l}</span>
+                    <b className="w-8 text-center">{a.n}</b>
+                    <span className="w-10 text-right text-sm text-gray-600">{pct(a.n)}%</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
 
-      {/* Modal d’ajout d’un nouveau rôle */}
-      <Dialog open={isAddingRole} onOpenChange={setIsAddingRole}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Ajouter un nouveau rôle</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <InputField
-              label="Nom du nouveau rôle"
-              value={newRole}
-              onChange={(v) => setNewRole(v)}
-            />
-            <Label>Choisir les accès du rôle</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {allPermissions.map((perm) => (
-                <label key={perm} className="flex items-center gap-2 text-gray-800">
-                  <input
-                    type="checkbox"
-                    checked={selectedPermissions.includes(perm) || perm === "profile:read"}
-                    disabled={perm === "profile:read"}
-                    onChange={() => togglePermission(perm)}
-                  />
-                  <span className={perm === "profile:read" ? "text-gray-500" : ""}>
-                    {permissionLabels[perm] || perm}
-                  </span>
-                </label>
-              ))}
+        {/* Filtres */}
+        <div className="bg-white rounded-xl border border-[#dbe5f5] p-3 shadow-sm flex flex-wrap gap-3 items-center">
+          <div className="relative flex-1 min-w-[220px]">
+            <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#1255d6]" />
+            <input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onFilter()} placeholder="Rechercher un personnel..." className="w-full border rounded-lg pl-9 pr-3 py-2.5 text-xs bg-[#f8fafd]" />
+          </div>
+          <select value={roleF} onChange={(e) => setRoleF(e.target.value)} className="border rounded-lg px-3 py-2.5 text-xs bg-[#f8fafd] min-w-[170px]">
+            <option value="">Tous les rôles</option>{roles.map((r) => <option key={r}>{r}</option>)}
+          </select>
+          <select value={statF} onChange={(e) => setStatF(e.target.value)} className="border rounded-lg px-3 py-2.5 text-xs bg-[#f8fafd] min-w-[170px]">
+            <option value="">Tous les statuts</option><option value="present">Actif</option><option value="conge">Congé</option><option value="absent">Absent</option>
+          </select>
+          <div className="flex items-center gap-2 border rounded-lg px-3 py-1.5 text-xs bg-[#f8fafd]">
+            <Calendar size={15} className="text-[#1255d6]" />
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="bg-transparent outline-none" />
+            <ArrowRight size={13} />
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="bg-transparent outline-none" />
+          </div>
+          <button onClick={onFilter} className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-6 py-2.5 rounded-lg"><Filter size={15} /> Filtrer</button>
+        </div>
+
+        {/* Liste */}
+        <div className="bg-white rounded-xl border border-[#dbe5f5] p-5 shadow-sm">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold flex items-center gap-2"><Users size={18} className="text-[#1255d6]" /> Liste des personnels ({filtered.length})</h3>
+            <button onClick={exportCsv} className="flex items-center gap-2 border border-[#cfdcf3] text-[#1255d6] text-xs font-semibold px-4 py-2 rounded-lg hover:bg-blue-50"><Download size={14} /> Exporter</button>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-xs">
+              <thead className="bg-[#f1f5fb] text-[#12306e]">
+                <tr>
+                  <th className="px-3 py-3 w-8"><input type="checkbox" checked={allChecked} onChange={toggleAll} /></th>
+                  {["Nom", "Email", "Téléphone", "Rôle", "Statut", "Date d'embauche", "Actions"].map((h) => <th key={h} className="text-left font-semibold px-3 py-3">{h}</th>)}
+                </tr>
+              </thead>
+              <tbody>
+                {rows.length === 0 && <tr><td colSpan={8} className="text-center py-8 text-gray-500">Aucun personnel trouvé.</td></tr>}
+                {rows.map((p) => (
+                  <tr key={p.id} className="border-b last:border-0 hover:bg-blue-50/40">
+                    <td className="px-3 py-3"><input type="checkbox" checked={selected.includes(p.id)} onChange={() => toggle(p.id)} /></td>
+                    <td className="px-3 py-3">
+                      <span className="flex items-center gap-3">
+                        {p.photo ? <img src={p.photo} alt="" className="w-9 h-9 rounded-full object-cover" />
+                          : <span className="w-9 h-9 rounded-full bg-[#dbe8ff] text-[#1d4fb8] font-bold text-[11px] flex items-center justify-center">{initials(p.name)}</span>}
+                        {p.name}
+                      </span>
+                    </td>
+                    <td className="px-3 py-3">{p.email}</td>
+                    <td className="px-3 py-3 whitespace-nowrap">{p.phone}</td>
+                    <td className="px-3 py-3"><span className={`px-3 py-1 rounded-md font-semibold ${roleBadge[p.kind]}`}>{p.role}</span></td>
+                    <td className="px-3 py-3">{p.status ? <span className={`px-3 py-1 rounded-md font-semibold ${stBadge[p.status]}`}>{stLabel[p.status]}</span> : "—"}</td>
+                    <td className="px-3 py-3">{p.hire ? fmt(p.hire) : "—"}</td>
+                    <td className="px-3 py-3">
+                      <span className="flex items-center gap-2">
+                        <button onClick={() => (onView ? onView(p.raw) : setDetail(p))} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Voir"><Eye size={15} /></button>
+                        <button onClick={() => onEdit?.(p.raw)} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Modifier"><Pencil size={15} /></button>
+                        <button onClick={() => remove(p)} className="w-8 h-8 rounded-md bg-[#ffe3e3] text-[#e5342f] flex items-center justify-center" title="Supprimer"><Trash2 size={15} /></button>
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <div className="flex items-center justify-between mt-4 text-xs text-gray-600">
+            <span>Affichage de {filtered.length === 0 ? 0 : start + 1} à {Math.min(start + PAGE, filtered.length)} sur {filtered.length} personnels</span>
+            <div className="flex gap-1.5">
+              <button disabled={current === 1} onClick={() => setPage(current - 1)} className="w-9 h-9 border rounded-md bg-white flex items-center justify-center disabled:opacity-40"><ChevronLeft size={15} /></button>
+              {pages.map((p) => <button key={p} onClick={() => setPage(p)} className={`w-9 h-9 border rounded-md ${p === current ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-white"}`}>{p}</button>)}
+              <button disabled={current === pageCount} onClick={() => setPage(current + 1)} className="w-9 h-9 border rounded-md bg-white flex items-center justify-center disabled:opacity-40"><ChevronRight size={15} /></button>
             </div>
           </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="secondary">Annuler</Button>
-            </DialogClose>
-            <Button
-              onClick={() => {
-                if (newRole.trim() !== "") {
-                  dispatch(
-                    addRoleWithPermissions({
-                      role: newRole,
-                      permissions: selectedPermissions,
-                    })
-                  );
-                  setFormData({ ...formData, role: newRole });
-                  setNewRole("");
-                  setSelectedPermissions([]);
-                  setIsAddingRole(false);
-                }
-              }}
-            >
-              Valider
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Modal de modification des permissions d’un rôle */}
-      <Dialog open={isEditingRole} onOpenChange={setIsEditingRole}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Modifier les permissions du rôle {editingRole}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-2">
-              {allPermissions.map((perm) => (
-                <label key={perm} className="flex items-center gap-2 text-gray-800">
-                  <input
-                    type="checkbox"
-                    checked={editingRolePermissions.includes(perm) || perm === "profile:read"}
-                    disabled={perm === "profile:read"}
-                    onChange={() => toggleEditPermission(perm)}
-                  />
-                  <span className={perm === "profile:read" ? "text-gray-500" : ""}>
-                    {permissionLabels[perm] || perm}
-                  </span>
-                </label>
-              ))}
-            </div>
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="secondary">Annuler</Button>
-            </DialogClose>
-            <Button onClick={handleSaveRolePermissions}>Enregistrer</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Onglets */}
-      <div className="tabs space-y-4">
-        <div className="tab-content space-y-4">
-          <Card className="border-border hover:shadow-md transition-shadow mb-6">
-            <CardContent className="pt-6">
-              <div className="flex flex-col md:flex-row gap-4">
-                {/* Champ recherche */}
-                <div className="flex-1 relative">
-                  <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
-                  <Input
-                    type="text"
-                    placeholder="Rechercher..."
-                    value={searchTerm}
-                    onChange={(e) => setSearchTerm(e.target.value)}
-                    className="pl-10 w-full"
-                  />
-                </div>
-
-                {/* Filtre rôle */}
-                <div className="w-full md:w-48 relative">
-                  <Filter className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400 z-10" />
-                  <Select value={filterRole} onValueChange={setFilterRole}>
-                    <SelectTrigger className="pl-10">
-                      <SelectValue placeholder="Tous les rôles" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">Tous les rôles</SelectItem>
-                      {rolesState.list.map((r) => (
-                        <SelectItem key={r} value={r}>
-                          {r}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {loading && <div>Chargement...</div>}
-          {error && <div className="text-red-500">{error}</div>}
-          <Card className="border-border hover:shadow-md transition-shadow mt-4">
-            <CardHeader>
-              <CardTitle className="flex items-center text-[#001F3F]">
-                <Users className="h-5 w-5 mr-2" />
-                Liste des personnels ({filteredPersonnels.length})
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="px-4 py-2">Nom</TableHead>
-                      <TableHead className="px-4 py-2">Email</TableHead>
-                      <TableHead className="px-4 py-2">Téléphone</TableHead>
-                      <TableHead className="px-4 py-2">Rôle</TableHead>
-                      {canEdit && <TableHead className="px-4 py-2 text-center">Actions</TableHead>}
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {filteredPersonnels.map(personnel => (
-                      <TableRow key={personnel.id} className="hover:bg-gray-50">
-                        <TableCell className="px-4 py-2">{personnel.name} {personnel.lastName}</TableCell>
-                        <TableCell className="px-4 py-2">{personnel.email}</TableCell>
-                        <TableCell className="px-4 py-2">{personnel.tel}</TableCell>
-                        <TableCell className="px-4 py-2">{personnel.role}</TableCell>
-                        {canEdit && (
-                          <TableCell className="px-4 py-2 text-center flex justify-center gap-2">
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => openEditForm(personnel)}
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => handleDelete(personnel.id)}
-                            >
-                              <Trash className="h-4 w-4" />
-                            </Button>
-                          </TableCell>
-                        )}
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </CardContent>
-          </Card>
         </div>
       </div>
+
+      {detail && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetail(null)}>
+          <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-bold">{detail.name}</h3><button onClick={() => setDetail(null)}><X size={18} /></button></div>
+            <dl className="text-sm space-y-2">
+              {[["Email", detail.email], ["Téléphone", detail.phone], ["Rôle", detail.role], ["Statut", detail.status ? stLabel[detail.status] : "—"], ["Date d'embauche", detail.hire ? fmt(detail.hire) : "—"]].map(([k, v]) => (
+                <div key={k} className="flex justify-between border-b pb-1"><dt className="text-gray-500">{k}</dt><dd className="font-medium">{v}</dd></div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
-export default PersonnelManagement;
+export default Personnel;
