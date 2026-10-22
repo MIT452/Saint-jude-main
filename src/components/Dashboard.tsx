@@ -1,12 +1,12 @@
 import { FC, useEffect, useMemo, useState } from "react";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
-  PieChart, Pie, Cell, AreaChart, Area, LabelList,
+  PieChart, Pie, Cell, AreaChart, Area, LabelList, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  Ship, Calculator, TrendingUp, TrendingDown, Bell, Search, Calendar, ChevronDown, UserCircle2, ClipboardList,
+  Ship, TrendingUp, Wallet, CalendarDays, CreditCard, Bell, Search, Calendar, ChevronDown, UserCircle2,
   Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle,
-  BarChart3, Brain, Lock, Navigation, ShieldCheck, MapPin,
+  BarChart3, Brain, Navigation, ShieldCheck, Package, Lightbulb, Download, Info, Trophy, MapPin,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
@@ -24,7 +24,8 @@ type Level = "Faible" | "Moyen" | "Élevé";
 type Alert = { t: string; s: string; lvl: Level };
 type Insight = { analyse: string; prevision: string; alertes: Alert[] };
 type Weather = {
-  temp: number; label: string; Icon: LucideIcon; wind: string; humidity: number; visibility: number; wave: number | null;
+  temp: number; label: string; Icon: LucideIcon; wind: string; windKmh: number; humidity: number;
+  visibility: number; wave: number | null;
   days: { d: string; t: string; label: string; Icon: LucideIcon }[];
 };
 
@@ -35,6 +36,11 @@ const lvlStyle: Record<Level, { c: string; Icon: LucideIcon; tc: string }> = {
   Moyen: { c: "bg-[#fff0d9] text-[#f59e0b]", Icon: AlertTriangle, tc: "text-[#d97706]" },
   Élevé: { c: "bg-[#ffe3e3] text-[#e5342f]", Icon: AlertTriangle, tc: "text-[#e5342f]" },
 };
+
+const compact = (v: number) =>
+  v >= 1_000_000 ? `${+(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${+(v / 1_000).toFixed(1)}k` : String(v);
+
+const GOODS_COLORS = ["#2563eb", "#f59e0b", "#22c55e", "#7c3aed", "#ef4444"];
 
 // Code météo Open-Meteo -> libellé + icône
 const wmo = (c: number): { label: string; Icon: LucideIcon } => {
@@ -74,6 +80,9 @@ const boatPos = (b: any): [number, number] | null => {
   return Number.isFinite(la) && Number.isFinite(lo) && lo > 42 && lo < 52 && la < -10 && la > -27 ? [lo, la] : null;
 };
 
+const boatName = (b: any) => b.name ?? b.nom ?? b.matricule ?? "Bateau";
+const boatState = (b: any) => String(b.state ?? b.etat ?? b.status ?? b.statut ?? "—");
+
 const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [revenuePeriod, setRevenuePeriod] = useState("mensuelle");
   const [revenueDataSets, setRevenueDataSets] = useState<RevenueDataSets>(revenueDataSetsVoid);
@@ -81,11 +90,16 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [weatherErr, setWeatherErr] = useState(false);
   const [insight, setInsight] = useState<Insight | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [loadedAt] = useState(() => new Date());
 
   const cashMouvement = useSelector((state: RootState) => state.stJude.cashMouvement);
   const trip = useSelector((state: RootState) => state.stJude.trip);
-  const reservation = useSelector((state: RootState) => state.stJude.reservation);
+  const reservation = useSelector((state: RootState) => state.stJude.reservation) as any[];
   const boats = useSelector((state: RootState) => ((state.stJude as any).boat ?? (state.stJude as any).boats ?? []) as any[]);
+  const goods = useSelector(
+    (state: RootState) =>
+      ((state.stJude as any).goods ?? (state.stJude as any).goodsList ?? (state.stJude as any).marchandise ?? []) as any[],
+  );
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
 
   useEffect(() => {
@@ -96,11 +110,13 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const totalCredit = cashMouvement.reduce((a, { credit }) => a + Number(credit), 0);
   const totalDebit = cashMouvement.reduce((a, { debit }) => a + Number(debit), 0);
   const solde = totalCredit - totalDebit;
-  const paid = reservation.reduce((a, { amountPaid }) => a + Number(amountPaid), 0);
-  const unpaid = reservation.reduce((a, { amountToPay }) => a + Number(amountToPay), 0);
+  const paid = reservation.reduce((a, r) => a + Number(r.amountPaid || 0), 0);
+  const unpaid = reservation.reduce((a, r) => a + Number(r.amountToPay || 0), 0);
   const payTotal = paid + unpaid;
-  const cancelled = reservation.filter((r: any) => r.status === "Annulée").length;
+  const payRate = payTotal ? Math.round((paid / payTotal) * 100) : null;
+  const cancelled = reservation.filter((r) => r.status === "Annulée").length;
   const unpaidCount = reservation.filter((r) => Number(r.amountToPay) > 0).length;
+  const debitOps = cashMouvement.filter((m) => Number(m.debit) > 0).length;
 
   const currentData: any[] = (revenueDataSets[revenuePeriod as keyof typeof revenueDataSets] || revenueDataSets.mensuelle) as any[];
   const revNumbers = currentData.map((d) => Number(d.revenus));
@@ -123,18 +139,50 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [revNumbers.join(","), revenuePeriod]);
 
-  const boatName = (b: any) => b.name ?? b.nom ?? b.matricule ?? "Bateau";
-  const boatState = (b: any) => String(b.state ?? b.etat ?? b.status ?? b.statut ?? "—");
+  // Ventes par trajet (réservations non annulées)
+  const routeStats = useMemo(() => {
+    const m = new Map<string, { name: string; ca: number; n: number }>();
+    reservation.forEach((r) => {
+      if (r.status === "Annulée") return;
+      const key = `${r.departure ?? "?"} → ${r.destination ?? "?"}`;
+      const v = m.get(key) ?? { name: key, ca: 0, n: 0 };
+      v.ca += Number(r.amountPaid || 0) + Number(r.amountToPay || 0);
+      v.n += 1;
+      m.set(key, v);
+    });
+    return [...m.values()].sort((a, b) => b.ca - a.ca);
+  }, [reservation]);
+  const bestRoute = routeStats[0];
+  const worstRoute = routeStats.length > 1 ? routeStats[routeStats.length - 1] : null;
+
+  // Répartition des marchandises (poids)
+  const goodsStats = useMemo(() => {
+    const m = new Map<string, number>();
+    goods.forEach((g) => {
+      const label = String(g.name ?? g.type ?? g.designation ?? g.nom ?? g.label ?? g.description ?? "Autres");
+      const w = Number(g.totalWeight ?? g.weight ?? g.poids ?? 0);
+      if (w > 0) m.set(label, (m.get(label) ?? 0) + w);
+    });
+    const sorted = [...m.entries()].sort((a, b) => b[1] - a[1]);
+    const top = sorted.slice(0, 4);
+    const rest = sorted.slice(4).reduce((s, [, v]) => s + v, 0);
+    if (rest > 0) top.push(["Autres", rest]);
+    const total = top.reduce((s, [, v]) => s + v, 0);
+    return { total, items: top.map(([name, value], i) => ({ name, value, color: GOODS_COLORS[i % GOODS_COLORS.length] })) };
+  }, [goods]);
 
   // Alertes locales calculées sur les vraies données (repli si l'IA est indisponible)
   const localAlerts = useMemo<Alert[]>(() => {
     const out: Alert[] = [];
-    if (unpaidCount > 0) out.push({ t: "Paiements en attente", s: `${unpaidCount} réservation(s) avec un solde à payer — ${formatCurrency(unpaid)}`, lvl: "Moyen" });
-    boats.filter((b) => /maint/i.test(boatState(b))).forEach((b) => out.push({ t: "Bateau en maintenance", s: boatName(b), lvl: "Moyen" }));
-    if (solde < 0) out.push({ t: "Solde net négatif", s: `Débit supérieur au crédit de ${formatCurrency(Math.abs(solde))}`, lvl: "Élevé" });
+    if (unpaidCount > 0) out.push({ t: "Paiements en attente", s: `${unpaidCount} réservation(s) avec un solde à payer : ${formatCurrency(unpaid)}`, lvl: "Moyen" });
+    boats.filter((b) => /maint/i.test(boatState(b))).forEach((b) => out.push({ t: "Bateau en maintenance", s: `${boatName(b)} est en maintenance. Vérifiez sa disponibilité avant de planifier un voyage.`, lvl: "Moyen" }));
+    if (solde < 0) out.push({ t: "Solde net négatif", s: `Les débits dépassent les crédits de ${formatCurrency(Math.abs(solde))}`, lvl: "Élevé" });
+    if (worstRoute && bestRoute && worstRoute.ca < bestRoute.ca * 0.25) {
+      out.push({ t: "Trajet peu rentable", s: `${worstRoute.name} : ${formatCurrency(worstRoute.ca)} pour ${worstRoute.n} réservation(s).`, lvl: "Faible" });
+    }
     return out.slice(0, 4);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unpaidCount, unpaid, boats, solde]);
+  }, [unpaidCount, unpaid, boats, solde, routeStats]);
 
   // ---------- Analyse IA des données réelles
   const signature = `${cashMouvement.length}-${reservation.length}-${trip.length}-${boats.length}-${totalCredit}-${totalDebit}`;
@@ -146,6 +194,7 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       credit: totalCredit, debit: totalDebit, solde, voyages: trip.length, reservations: reservation.length,
       annulees: cancelled, montantPaye: paid, montantNonPaye: unpaid, reservationsAvecSolde: unpaidCount,
       revenusRecents: revNumbers.slice(-6), bateaux: boats.map((b) => ({ nom: boatName(b), etat: boatState(b) })),
+      trajets: routeStats.slice(0, 5),
     };
     const prompt = `Tu es l'IA d'analyse de SAINT-JUDE (transport maritime, Madagascar, montants en Ar). Données réelles: ${JSON.stringify(data)}.
 Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phrases maximum","alertes":[{"titre":"","detail":"","niveau":"Faible|Moyen|Élevé"}]}. 4 alertes maximum. N'invente aucune donnée absente.`;
@@ -181,6 +230,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         setWeather({
           temp: Math.round(f.current.temperature_2m), label: w.label, Icon: w.Icon,
           wind: `${Math.round(f.current.wind_speed_10m)} km/h (${compass(f.current.wind_direction_10m)})`,
+          windKmh: Math.round(f.current.wind_speed_10m),
           humidity: Math.round(f.current.relative_humidity_2m), visibility: Math.round((f.current.visibility ?? 0) / 1000),
           wave: m?.current?.wave_height ?? null,
           days: [1, 2, 3].map((i) => {
@@ -196,18 +246,49 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     return () => { off = true; };
   }, []);
 
-  const paymentData = [
-    { name: "Frais payés", value: paid, color: "#2563eb" },
-    { name: "Frais non payés", value: unpaid, color: "#ef4444" },
-  ];
+  const seaRisk = weather ? (weather.wave != null && weather.wave > 2) || weather.windKmh > 40 : false;
+  const boatsWithGps = boats.filter((b) => boatPos(b)).length;
+  const updatedLabel = loadedAt.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   const stats = [
-    { title: "Total Crédit", value: formatCurrency(totalCredit), sub: "Total encaissé", icon: TrendingUp, bg: "bg-[#0f9d78]" },
-    { title: "Total Débit", value: formatCurrency(totalDebit), sub: "Total dépensé", icon: TrendingDown, bg: "bg-[#ef4444]" },
-    { title: "Solde net", value: formatCurrency(solde), sub: "Crédit − Débit", icon: Calculator, bg: "bg-[#7c3aed]" },
-    { title: "Nombre de voyages", value: String(trip.length), sub: "Voyages enregistrés", icon: Ship, bg: "bg-[#1d6fe0]" },
-    { title: "Réservations", value: String(reservation.length), sub: `dont ${cancelled} annulée(s)`, icon: ClipboardList, bg: "bg-[#f59e0b]", orange: true },
+    { title: "Chiffre d'affaires total", value: formatCurrency(totalCredit), sub: "Total encaissé", icon: TrendingUp, bg: "bg-[#0f9d78]" },
+    { title: "Total des dépenses", value: formatCurrency(totalDebit), sub: "Total dépensé", icon: Wallet, bg: "bg-[#ef4444]" },
+    { title: "Réservations totales", value: String(reservation.length), sub: `dont ${cancelled} annulée(s)`, icon: CalendarDays, bg: "bg-[#7c3aed]" },
+    { title: "Voyages effectués", value: String(trip.length), sub: "Voyages enregistrés", icon: Ship, bg: "bg-[#1d6fe0]" },
+    { title: "Taux de paiement", value: payRate != null ? `${payRate}%` : "—", sub: `${unpaidCount} réservation(s) avec solde`, icon: CreditCard, bg: "bg-[#f59e0b]" },
   ];
+
+  const justifs: { Icon: LucideIcon; bg: string; box: string; title: string; text: string; source: string }[] = [
+    { Icon: TrendingUp, bg: "bg-[#0f9d78]", box: "bg-[#eefaf5]", title: `Chiffre d'affaires : ${formatCurrency(totalCredit)}`, text: `Somme des crédits de la caisse (${cashMouvement.length} mouvement(s)). ${reservation.length} réservation(s) enregistrée(s).`, source: "Base de données SAINT-JUDE" },
+    { Icon: Wallet, bg: "bg-[#ef4444]", box: "bg-[#fff1f1]", title: `Dépenses : ${formatCurrency(totalDebit)}`, text: `Somme des débits de la caisse (${debitOps} opération(s)).`, source: "Base de données SAINT-JUDE" },
+    { Icon: CalendarDays, bg: "bg-[#7c3aed]", box: "bg-[#f5f0ff]", title: `Réservations : ${reservation.length}`, text: `Nombre de réservations enregistrées, dont ${cancelled} annulée(s).`, source: "Base de données SAINT-JUDE" },
+    { Icon: Ship, bg: "bg-[#1d6fe0]", box: "bg-[#eef4ff]", title: `Trajets : ${trip.length}`, text: "Voyages enregistrés dans la table des trajets.", source: "Base de données SAINT-JUDE" },
+    { Icon: CloudSun, bg: "bg-[#f59e0b]", box: "bg-[#fff8ea]", title: weather ? `Météo : ${weather.temp}°C` : "Météo", text: weather ? `${weather.label} à Toamasina, vent ${weather.wind}.` : "Données météo indisponibles pour le moment.", source: "Open-Meteo API" },
+    { Icon: MapPin, bg: "bg-[#0f9d78]", box: "bg-[#eefaf5]", title: `GPS : ${boatsWithGps}/${boats.length} bateau(x)`, text: "Bateaux dont la position GPS est renseignée.", source: "Positions enregistrées" },
+  ];
+
+  const exportReport = () => {
+    const rows: (string | number)[][] = [
+      ["Indicateur", "Valeur"],
+      ["Chiffre d'affaires (Ar)", totalCredit],
+      ["Dépenses (Ar)", totalDebit],
+      ["Solde net (Ar)", solde],
+      ["Réservations", reservation.length],
+      ["Réservations annulées", cancelled],
+      ["Voyages", trip.length],
+      ["Taux de paiement (%)", payRate ?? ""],
+      [],
+      ["Trajet", "Réservations", "Chiffre d'affaires (Ar)"],
+      ...routeStats.map((r) => [r.name, r.n, r.ca]),
+    ];
+    const csv = rows.map((r) => r.join(";")).join("\n");
+    const url = URL.createObjectURL(new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" }));
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `rapport-saint-jude-${loadedAt.toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const now = new Date();
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
@@ -217,22 +298,17 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     <div className="p-5 bg-[#f3f7fd] min-h-full space-y-4 text-[#10285e]">
       {/* En-tête */}
       <div className="flex flex-wrap items-center gap-4">
-        <div className="mr-auto">
-          <h1 className="text-xl font-extrabold">Bonjour, {roleLabel}</h1>
-          <p className="text-xs text-[#3e5788]">Voici un résumé de l'activité de SAINT-JUDE aujourd'hui.</p>
-        </div>
-        <div className="relative min-w-[260px]">
+        <div className="relative min-w-[260px] flex-1">
           <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-          <input placeholder="Rechercher une réservation, un bateau..." className="w-full bg-white border border-[#dbe5f5] rounded-full pl-9 pr-3 py-2 text-xs" />
+          <input placeholder="Rechercher une réservation, un bateau, un client, un trajet..." className="w-full bg-white border border-[#dbe5f5] rounded-full pl-9 pr-3 py-2 text-xs" />
         </div>
         {currentUser?.role === "Propriétaire" && (
           <button onClick={() => onSetToAudit("Audit")} className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-xs font-semibold px-4 py-2 rounded-full">
             <ShieldCheck size={16} /> Audit Logs
           </button>
         )}
-        <div className="relative w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
+        <div className="w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
           <Bell size={18} />
-          {alerts.length > 0 && <span className="absolute -top-1 -right-1 bg-[#e5342f] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">{alerts.length}</span>}
         </div>
         <div className="flex items-center gap-2 bg-white border border-[#dbe5f5] rounded-full pl-1 pr-3 py-1">
           <div className="w-8 h-8 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={18} /></div>
@@ -245,6 +321,15 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
       </div>
 
+      {/* Titre */}
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl bg-[#e0ecff] text-[#1255d6] flex items-center justify-center"><BarChart3 size={24} /></div>
+        <div>
+          <h1 className="text-2xl font-extrabold leading-tight">Tableau de bord analytique & IA</h1>
+          <p className="text-xs text-[#3e5788]">Des données fiables, des analyses claires et des recommandations pour mieux décider.</p>
+        </div>
+      </div>
+
       {/* KPI */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
         {stats.map((s) => {
@@ -253,8 +338,8 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             <div key={s.title} className={`${card} p-4 flex items-center gap-3`}>
               <div className={`w-14 h-14 rounded-full ${s.bg} text-white flex items-center justify-center shrink-0`}><Icon size={26} /></div>
               <div className="min-w-0">
-                <p className={`text-xs font-semibold ${s.orange ? "text-[#f59e0b]" : ""}`}>{s.title}</p>
-                <p className={`text-2xl font-extrabold leading-tight truncate ${s.orange ? "text-[#f59e0b]" : "text-[#1255d6]"}`}>{s.value}</p>
+                <p className="text-xs font-semibold">{s.title}</p>
+                <p className="text-2xl font-extrabold leading-tight truncate text-[#1255d6]">{s.value}</p>
                 <p className="text-[11px] text-gray-500">{s.sub}</p>
               </div>
             </div>
@@ -262,11 +347,11 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         })}
       </div>
 
-      {/* Ligne 1 : revenus, paiements, bateaux, météo */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1.15fr_1fr_0.95fr_0.95fr] gap-3">
+      {/* Ligne 1 : revenus, marchandises, GPS, météo */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1.3fr_1fr_1fr_0.95fr] gap-3">
         <div className={`${card} p-4`}>
           <div className="flex items-start justify-between">
-            <div><h3 className="font-bold">Évolution des Revenus</h3><p className="text-[11px] text-gray-500">En milliers d'Ar</p></div>
+            <div><h3 className="font-bold">Évolution du chiffre d'affaires</h3><p className="text-[11px] text-gray-500">En milliers d'Ar</p></div>
             <select value={revenuePeriod} onChange={(e) => setRevenuePeriod(e.target.value)} className="border rounded-md text-xs px-2 py-1 bg-[#f8fafd]">
               <option value="hebdomadaire">Hebdomadaire</option>
               <option value="mensuelle">Mensuelle</option>
@@ -280,45 +365,46 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
               <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
               <XAxis dataKey="periode" tick={{ fontSize: 10 }} />
               <YAxis tick={{ fontSize: 10 }} />
-              <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} Mille MGA`, "Revenus"]} />
+              <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} Mille MGA`, "Chiffre d'affaires"]} />
               <Bar dataKey="revenus" fill="#1d6fe0" radius={[3, 3, 0, 0]}>
                 <LabelList dataKey="revenus" position="top" style={{ fontSize: 10, fontWeight: 700 }} />
               </Bar>
             </BarChart>
           </ResponsiveContainer>
           <div className="grid grid-cols-3 gap-2 text-[10px]">
-            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Revenu total</p><p className="font-bold text-[#1255d6] text-xs">{revTotal.toFixed(1)} Mille Ar</p></div>
-            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Moyenne</p><p className="font-bold text-[#1255d6] text-xs">{revAvg.toFixed(1)} Mille Ar</p></div>
-            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Meilleure période</p><p className="font-bold text-[#1255d6] text-xs">{revBest ? `${Number(revBest.revenus).toFixed(1)} Mille Ar` : "—"}</p></div>
+            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Revenu moyen par période</p><p className="font-bold text-[#1255d6] text-xs">{revAvg.toFixed(1)} Mille Ar</p></div>
+            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Panier moyen</p><p className="font-bold text-[#1255d6] text-xs">{reservation.length ? formatCurrency(payTotal / reservation.length) : "—"}</p></div>
+            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Meilleure période</p><p className="font-bold text-[#1255d6] text-xs">{revBest ? `${revBest.periode} (${Number(revBest.revenus).toFixed(1)} Mille Ar)` : "—"}</p></div>
           </div>
         </div>
 
         <div className={`${card} p-4`}>
           <div className="flex items-center gap-3 mb-2">
-            <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><BarChart3 size={18} /></div>
-            <div><h3 className="font-bold">Répartition des Paiements</h3><p className="text-[11px] text-gray-500">Frais de transport de marchandises</p></div>
+            <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><Package size={18} /></div>
+            <div><h3 className="font-bold">Répartition des marchandises</h3><p className="text-[11px] text-gray-500">Selon le poids transporté</p></div>
           </div>
           <div className="flex items-center gap-2">
-            <div className="relative w-[190px] h-[210px] shrink-0">
+            <div className="relative w-[170px] h-[200px] shrink-0">
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={payTotal ? paymentData : [{ name: "Aucune donnée", value: 1, color: "#e5ebf5" }]} dataKey="value" innerRadius={55} outerRadius={85} stroke="#fff">
-                    {(payTotal ? paymentData : [{ name: "Aucune donnée", value: 1, color: "#e5ebf5" }]).map((e) => <Cell key={e.name} fill={e.color} />)}
+                  <Pie data={goodsStats.total ? goodsStats.items : [{ name: "Aucune donnée", value: 1, color: "#e5ebf5" }]} dataKey="value" innerRadius={50} outerRadius={80} stroke="#fff">
+                    {(goodsStats.total ? goodsStats.items : [{ name: "Aucune donnée", value: 1, color: "#e5ebf5" }]).map((e) => <Cell key={e.name} fill={e.color} />)}
                   </Pie>
-                  <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} Ar`, "Montant"]} />
+                  <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} kg`, "Poids"]} />
                 </PieChart>
               </ResponsiveContainer>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
-                <span className="text-[10px]">Total payé</span>
-                <span className="text-xs font-extrabold">{formatCurrency(paid)}</span>
+                <span className="text-[10px]">Total</span>
+                <span className="text-xs font-extrabold">{goodsStats.total ? `${goodsStats.total.toLocaleString()} kg` : "—"}</span>
               </div>
             </div>
-            <ul className="text-xs space-y-3 flex-1">
-              {paymentData.map((p) => (
+            <ul className="text-xs space-y-2.5 flex-1">
+              {goodsStats.items.length === 0 && <li className="text-gray-500">Aucune marchandise enregistrée.</li>}
+              {goodsStats.items.map((p) => (
                 <li key={p.name} className="flex items-center gap-2">
-                  <i className="w-2.5 h-2.5 rounded-full inline-block" style={{ background: p.color }} />
-                  <span className="flex-1">{p.name}</span>
-                  <b>{payTotal ? Math.round((p.value / payTotal) * 100) : 0}%</b>
+                  <i className="w-2.5 h-2.5 rounded-full inline-block shrink-0" style={{ background: p.color }} />
+                  <span className="flex-1 truncate">{p.name}</span>
+                  <b>{Math.round((p.value / goodsStats.total) * 100)}%</b>
                 </li>
               ))}
             </ul>
@@ -326,51 +412,50 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
 
         <div className={`${card} p-4`}>
-          <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi GPS des Bateaux</h3>
-          <p className="text-[11px] text-gray-500 mb-2">Position en temps réel</p>
-          <div className="grid grid-cols-[1fr_1.1fr] gap-2">
-            <div className="rounded-lg bg-[#d9ecfb] border h-[230px] overflow-hidden">
-              <svg viewBox="0 0 160 290" className="w-full h-full">
-                <path d={MADA_PATH} fill="#e6efd9" stroke="#7fa36a" strokeWidth="0.8" strokeLinejoin="round" />
-                {CITIES.map((c) => {
-                  const [x, y] = proj(c.lon, c.lat);
-                  return (
-                    <g key={c.n}>
-                      <circle cx={x} cy={y} r={c.port ? 2.6 : 1.8} fill={c.port ? "#1255d6" : "#64748b"} />
-                      <text x={c.left ? x - 4 : x + 4} y={y + 2.5} fontSize="7" textAnchor={c.left ? "end" : "start"} fill="#10285e">{c.n}</text>
-                    </g>
-                  );
-                })}
-                {boats.map((b, i) => {
-                  const p = boatPos(b);
-                  if (!p) return null;
-                  const [x, y] = proj(p[0], p[1]);
-                  const maint = /maint/i.test(boatState(b));
-                  return (
-                    <g key={i}>
-                      <circle cx={x} cy={y} r={6} fill={maint ? "#ef4444" : "#22c55e"} fillOpacity={0.25} />
-                      <circle cx={x} cy={y} r={3} fill={maint ? "#ef4444" : "#22c55e"} stroke="#fff" strokeWidth="1" />
-                      <text x={x + 6} y={y - 5} fontSize="7" fontWeight="700" fill="#10285e">{boatName(b)}</text>
-                    </g>
-                  );
-                })}
-              </svg>
-            </div>
-            <div className="space-y-2 max-h-[230px] overflow-y-auto">
-              {boats.length === 0 && <p className="text-xs text-gray-500 py-6 text-center">Aucun bateau enregistré.</p>}
-              {boats.map((b, i) => {
-                const st = boatState(b);
-                const maint = /maint/i.test(st);
-                const p = boatPos(b);
+          <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi GPS des bateaux</h3>
+          <p className="text-[11px] text-gray-500 mb-2">Dernières positions enregistrées</p>
+          <div className="rounded-lg bg-[#d9ecfb] border h-[190px] overflow-hidden">
+            <svg viewBox="0 0 160 290" className="w-full h-full">
+              <path d={MADA_PATH} fill="#e6efd9" stroke="#7fa36a" strokeWidth="0.8" strokeLinejoin="round" />
+              {CITIES.map((c) => {
+                const [x, y] = proj(c.lon, c.lat);
                 return (
-                  <div key={i} className="border rounded-lg p-2 text-[10px] bg-[#f8fafd]">
-                    <p className="font-bold text-xs flex items-center gap-1"><i className={`w-2 h-2 rounded-full inline-block ${maint ? "bg-red-500" : "bg-green-500"}`} />{boatName(b)}</p>
-                    <p className={`font-semibold ${maint ? "text-orange-500" : "text-green-600"}`}>{st}</p>
-                    <p className="text-gray-600">{p ? `Lat : ${p[1].toFixed(2)}  Lon : ${p[0].toFixed(2)}` : "Position GPS non renseignée"}</p>
-                  </div>
+                  <g key={c.n}>
+                    <circle cx={x} cy={y} r={c.port ? 2.6 : 1.8} fill={c.port ? "#1255d6" : "#64748b"} />
+                    <text x={c.left ? x - 4 : x + 4} y={y + 2.5} fontSize="7" textAnchor={c.left ? "end" : "start"} fill="#10285e">{c.n}</text>
+                  </g>
                 );
               })}
-            </div>
+              {boats.map((b, i) => {
+                const p = boatPos(b);
+                if (!p) return null;
+                const [x, y] = proj(p[0], p[1]);
+                const maint = /maint/i.test(boatState(b));
+                return (
+                  <g key={i}>
+                    <circle cx={x} cy={y} r={6} fill={maint ? "#ef4444" : "#22c55e"} fillOpacity={0.25} />
+                    <circle cx={x} cy={y} r={3} fill={maint ? "#ef4444" : "#22c55e"} stroke="#fff" strokeWidth="1" />
+                    <text x={x + 6} y={y - 5} fontSize="7" fontWeight="700" fill="#10285e">{boatName(b)}</text>
+                  </g>
+                );
+              })}
+            </svg>
+          </div>
+          <div className="mt-2 space-y-1.5 max-h-[84px] overflow-y-auto">
+            {boats.length === 0 && <p className="text-xs text-gray-500 text-center">Aucun bateau enregistré.</p>}
+            {boats.map((b, i) => {
+              const st = boatState(b);
+              const maint = /maint/i.test(st);
+              const p = boatPos(b);
+              return (
+                <div key={i} className="border rounded-lg px-2 py-1 text-[10px] bg-[#f8fafd] flex items-center gap-2">
+                  <i className={`w-2 h-2 rounded-full inline-block shrink-0 ${maint ? "bg-red-500" : "bg-green-500"}`} />
+                  <b className="text-xs">{boatName(b)}</b>
+                  <span className={`font-semibold ${maint ? "text-orange-500" : "text-green-600"}`}>{st}</span>
+                  <span className="ml-auto text-gray-500">{p ? `${p[1].toFixed(2)} / ${p[0].toFixed(2)}` : "GPS non renseigné"}</span>
+                </div>
+              );
+            })}
           </div>
           <div className="flex gap-3 text-[10px] mt-2">
             <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-green-500 inline-block" />Bateau en route</span>
@@ -379,7 +464,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
 
         <div className={`${card} p-4`}>
-          <h3 className="font-bold flex items-center gap-2"><Cloud size={16} className="text-[#1255d6]" /> Météo & Conditions Maritimes</h3>
+          <h3 className="font-bold flex items-center gap-2"><Cloud size={16} className="text-[#1255d6]" /> Météo & Conditions maritimes</h3>
           <p className="text-[11px] text-gray-500">Toamasina – Aujourd'hui</p>
           {!weather && <p className="text-xs text-gray-500 py-10 text-center">{weatherErr ? "Météo indisponible (connexion)." : "Chargement de la météo…"}</p>}
           {weather && (
@@ -401,86 +486,127 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                   </div>
                 ))}
               </div>
+              <div className={`mt-3 flex items-start gap-2 rounded-lg p-2.5 text-[10px] ${seaRisk ? "bg-[#fff0d9] text-[#b45309]" : "bg-[#e8f1ff] text-[#1255d6]"}`}>
+                <Info size={14} className="shrink-0 mt-0.5" />
+                <p>{seaRisk ? "Prudence : vent fort ou mer agitée, adaptez les départs." : "Les conditions sont favorables à la navigation."}</p>
+              </div>
             </>
           )}
         </div>
       </div>
 
-      {/* Ligne 2 : analytics, prévisions IA, alertes */}
-      <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.35fr_1fr] gap-3">
+      {/* Ligne 2 : ventes par trajet, prévisions, justifications ; puis recommandations */}
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_1.25fr_1fr] gap-3">
         <div className={`${card} p-4`}>
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-9 h-9 rounded-xl bg-[#1255d6] text-white flex items-center justify-center"><BarChart3 size={18} /></div>
-            <div className="flex-1"><h3 className="font-bold text-sm">Data Analytics</h3><p className="text-[11px] text-gray-500">— Indicateurs clés</p></div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 text-[11px]">
-            {[
-              ["Taux de paiement", payTotal ? `${Math.round((paid / payTotal) * 100)}%` : "—"],
-              ["Panier moyen", reservation.length ? formatCurrency(payTotal / reservation.length) : "—"],
-              ["Nbre de réservations", String(reservation.length)],
-              ["Taux d'annulation", reservation.length ? `${Math.round((cancelled / reservation.length) * 100)}%` : "—"],
-            ].map(([l, v]) => (
-              <div key={l} className="border rounded-lg p-2.5 bg-[#f8fafd]">
-                <p className="text-gray-600">{l}</p><p className="text-lg font-extrabold">{v}</p>
+          <h3 className="font-bold text-sm flex items-center gap-2"><BarChart3 size={16} className="text-[#1255d6]" /> Analyse des ventes par trajet</h3>
+          {routeStats.length === 0 ? (
+            <p className="text-xs text-gray-500 py-10 text-center">Aucune réservation à analyser.</p>
+          ) : (
+            <div className="grid grid-cols-[1.6fr_1fr] gap-2">
+              <ResponsiveContainer width="100%" height={200}>
+                <ComposedChart data={routeStats.slice(0, 6)} margin={{ top: 10, right: 0, left: -10 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
+                  <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
+                  <YAxis yAxisId="ca" tick={{ fontSize: 9 }} tickFormatter={compact} />
+                  <YAxis yAxisId="n" orientation="right" tick={{ fontSize: 9 }} allowDecimals={false} />
+                  <RechartsTooltip formatter={(v: number | string, name: string) => [name === "Chiffre d'affaires" ? formatCurrency(Number(v)) : v, name]} />
+                  <Bar yAxisId="ca" dataKey="ca" name="Chiffre d'affaires" fill="#1d6fe0" radius={[3, 3, 0, 0]} />
+                  <Line yAxisId="n" type="monotone" dataKey="n" name="Réservations" stroke="#f59e0b" strokeWidth={2} />
+                </ComposedChart>
+              </ResponsiveContainer>
+              <div className="space-y-3 text-[10px]">
+                <div>
+                  <p className="font-semibold flex items-center gap-1"><Trophy size={12} className="text-[#f59e0b]" /> Trajet le plus rentable</p>
+                  <p className="font-bold text-xs mt-1">{bestRoute.name}</p>
+                  <p className="text-[#1255d6] font-bold">{formatCurrency(bestRoute.ca)}</p>
+                  <p className="text-gray-500">({bestRoute.n} réservation(s))</p>
+                </div>
+                {worstRoute && (
+                  <div>
+                    <p className="font-semibold flex items-center gap-1"><AlertTriangle size={12} className="text-[#e5342f]" /> Trajet le moins rentable</p>
+                    <p className="font-bold text-xs mt-1">{worstRoute.name}</p>
+                    <p className="text-[#e5342f] font-bold">{formatCurrency(worstRoute.ca)}</p>
+                    <p className="text-gray-500">({worstRoute.n} réservation(s))</p>
+                  </div>
+                )}
               </div>
-            ))}
-          </div>
+            </div>
+          )}
         </div>
 
         <div className={`${card} p-4`}>
           <div className="flex items-center gap-3 mb-2">
             <div className="w-9 h-9 rounded-xl bg-[#7c3aed] text-white flex items-center justify-center"><Brain size={18} /></div>
-            <h3 className="font-bold text-sm flex-1">Data Science <span className="text-gray-500 font-normal">— Prévisions & Anomalies</span></h3>
+            <h3 className="font-bold text-sm flex-1">Data Science <span className="text-gray-500 font-normal">— Prévisions & Tendances</span></h3>
             <span className="text-[10px] text-gray-500">{aiBusy ? "Analyse IA en cours…" : insight ? "Analyse IA" : "Calcul local"}</span>
           </div>
-          <div className="grid grid-cols-[1fr_1.1fr] gap-3">
-            <div className="text-[11px] space-y-2">
+          <p className="text-[11px] font-semibold mb-1">Prévision du chiffre d'affaires (période suivante)</p>
+          <div className="grid grid-cols-[1.3fr_1fr] gap-3">
+            <ResponsiveContainer width="100%" height={190}>
+              <AreaChart data={forecast.data} margin={{ left: -15 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
+                <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
+                <YAxis tick={{ fontSize: 9 }} />
+                <RechartsTooltip />
+                <Legend wrapperStyle={{ fontSize: 10 }} />
+                <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
+                <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
+              </AreaChart>
+            </ResponsiveContainer>
+            <div className="rounded-lg bg-[#eef4ff] p-3 text-[11px] space-y-2">
+              <p className="font-bold text-[#1255d6] flex items-center gap-1.5"><Brain size={14} /> Insights IA</p>
               <p className="text-gray-700">{insight?.analyse || (revNumbers.length ? `Revenu total sur la période : ${revTotal.toFixed(1)} Mille Ar.` : "Pas assez de données pour analyser.")}</p>
               <p className="text-gray-700">{insight?.prevision || (forecast.next != null ? `Tendance : prochain point estimé à ${forecast.next.toFixed(1)} Mille Ar (régression linéaire).` : "")}</p>
             </div>
-            <ResponsiveContainer width="100%" height={120}>
-              <AreaChart data={forecast.data}>
-                <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
-                <RechartsTooltip />
-                <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
-                <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="none" name="Prévision" />
-              </AreaChart>
-            </ResponsiveContainer>
           </div>
         </div>
 
-        <div className={`${card} p-4`}>
-          <div className="flex items-center justify-between mb-2">
-            <h3 className="font-bold text-sm flex items-center gap-2"><Bell size={16} className="text-[#e5342f]" /> Alertes & Notifications</h3>
-            <span className="text-[10px] text-gray-500">{insight && insight.alertes.length ? "IA" : "Calcul local"}</span>
-          </div>
-          <ul className="space-y-2.5">
-            {alerts.length === 0 && <li className="text-xs text-gray-500 py-4 text-center">Aucune alerte pour le moment.</li>}
-            {alerts.map((a, i) => {
-              const { c, Icon, tc } = lvlStyle[a.lvl];
-              return (
-                <li key={i} className="flex items-start gap-2 text-[11px]">
-                  <span className={`w-7 h-7 rounded-full flex items-center justify-center shrink-0 ${c}`}><Icon size={14} /></span>
-                  <div className="flex-1"><p className={`font-semibold ${tc}`}>{a.t}</p><p className="text-gray-600">{a.s}</p></div>
-                </li>
-              );
-            })}
+        <div className={`${card} p-4 xl:col-start-3 xl:row-start-1 xl:row-span-2`}>
+          <h3 className="font-bold text-sm flex items-center gap-2 mb-3"><Brain size={16} className="text-[#e5342f]" /> IA – Justifications des indicateurs</h3>
+          <ul className="space-y-2">
+            {justifs.map((j) => (
+              <li key={j.title} className={`flex items-start gap-3 rounded-lg p-2.5 ${j.box}`}>
+                <span className={`w-9 h-9 rounded-full ${j.bg} text-white flex items-center justify-center shrink-0`}><j.Icon size={16} /></span>
+                <div className="min-w-0 text-[10px]">
+                  <p className="font-bold text-xs">{j.title}</p>
+                  <p className="text-gray-600">{j.text}</p>
+                  <p className="text-gray-400 mt-0.5">Source : {j.source} · Mis à jour : {updatedLabel}</p>
+                </div>
+              </li>
+            ))}
           </ul>
+        </div>
+
+        <div className={`${card} p-4 xl:col-span-2`}>
+          <h3 className="font-bold text-sm flex items-center gap-2 mb-3"><Lightbulb size={16} className="text-[#f59e0b]" /> Recommandations & alertes de l'IA</h3>
+          {alerts.length === 0 ? (
+            <p className="text-xs text-gray-500 py-4 text-center">Aucune recommandation pour le moment.</p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+              {alerts.map((a, i) => {
+                const { c, Icon, tc } = lvlStyle[a.lvl];
+                return (
+                  <div key={i} className="border rounded-xl p-3 flex items-start gap-2 text-[11px] bg-[#f8fafd]">
+                    <span className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${c}`}><Icon size={16} /></span>
+                    <div><p className={`font-semibold ${tc}`}>{a.t}</p><p className="text-gray-600">{a.s}</p></div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
       {/* Bandeau bas */}
-      <div className={`${card} px-5 py-3 flex flex-wrap items-center gap-6 text-[11px]`}>
-        <div className="flex items-center gap-2 font-bold text-sm"><Ship size={22} className="text-[#1255d6]" /> SAINT-JUDE <span className="font-normal text-gray-500">Transport Maritime</span></div>
-        {[
-          [Lock, "Sécurité des données", "Chiffrement & sauvegarde"],
-          [Brain, "IA & Analytics", "Des décisions plus éclairées"],
-          [MapPin, "GPS & Cartographie", "Suivi en temps réel des bateaux"],
-          [Cloud, "Météo Marine", "Navigation sécurisée"],
-        ].map(([I, t, s]: any) => (
-          <div key={t} className="flex items-center gap-2"><I size={22} className="text-[#1255d6]" /><div><p className="font-semibold">{t}</p><p className="text-gray-500 text-[10px]">{s}</p></div></div>
-        ))}
-        <p className="ml-auto italic text-[#1255d6]">Plus qu'un transport, une confiance.</p>
+      <div className="rounded-xl bg-[#0b2a6b] text-white px-5 py-3 flex flex-wrap items-center gap-4 text-[11px]">
+        <Brain size={26} />
+        <p><b className="text-sm">SAINT-JUDE AI</b> &nbsp; Plus qu'un outil : un assistant qui explique, justifie et vous aide à décider.</p>
+        <span className="ml-auto flex items-center gap-2 rounded-full border border-white/30 px-3 py-1.5">
+          <i className="w-2 h-2 rounded-full bg-green-400 inline-block" /> Données en temps réel
+        </span>
+        <button onClick={exportReport} className="flex items-center gap-2 rounded-full border border-white/30 px-3 py-1.5 hover:bg-white/10">
+          <Download size={14} /> Exporter le rapport
+        </button>
       </div>
     </div>
   );
