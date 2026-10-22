@@ -31,7 +31,7 @@ function headers(): HeadersInit {
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`${API}/api/ai/agent/${path}`, {
+  const res = await fetch(`${API}/ai/agent/${path}`, {
     method: "POST",
     headers: headers(),
     credentials: "include",
