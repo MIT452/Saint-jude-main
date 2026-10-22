@@ -4,9 +4,9 @@ import {
   PieChart, Pie, Cell, AreaChart, Area, LabelList, Legend, ComposedChart, Line,
 } from "recharts";
 import {
-  Ship, TrendingUp, Wallet, CalendarDays, CreditCard, Bell, Search, Calendar, ChevronDown, UserCircle2,
+  Ship, TrendingUp, TrendingDown, Wallet, CalendarDays, CreditCard, Bell, Search, Calendar, ChevronDown, UserCircle2,
   Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle,
-  BarChart3, Brain, Navigation, ShieldCheck, Package, Lightbulb, Download, Info, Trophy, MapPin,
+  BarChart3, Brain, Navigation, ShieldCheck, Package, Lightbulb, Download, Info, Trophy, MapPin, ArrowRight, Minus,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
@@ -21,13 +21,14 @@ interface PropsDashboard {
 }
 
 type Level = "Faible" | "Moyen" | "Élevé";
-type Alert = { t: string; s: string; lvl: Level };
-type Insight = { analyse: string; prevision: string; alertes: Alert[] };
+type Alert = { t: string; s: string; lvl: Level; a?: string };
+type Insight = { analyse: string; prevision: string; facteurs: string[]; alertes: Alert[] };
 type Weather = {
   temp: number; label: string; Icon: LucideIcon; wind: string; windKmh: number; humidity: number;
   visibility: number; wave: number | null;
   days: { d: string; t: string; label: string; Icon: LucideIcon }[];
 };
+type Tab = "Demande" | "Prix" | "Recettes" | "Marchandises";
 
 const card = "bg-white rounded-xl border border-[#dbe5f5] shadow-sm";
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -41,6 +42,7 @@ const compact = (v: number) =>
   v >= 1_000_000 ? `${+(v / 1_000_000).toFixed(1)}M` : v >= 1_000 ? `${+(v / 1_000).toFixed(1)}k` : String(v);
 
 const GOODS_COLORS = ["#2563eb", "#f59e0b", "#22c55e", "#7c3aed", "#ef4444"];
+const capitalizeWords = (s: string) => s.replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
 
 // Code météo Open-Meteo -> libellé + icône
 const wmo = (c: number): { label: string; Icon: LucideIcon } => {
@@ -82,6 +84,17 @@ const boatPos = (b: any): [number, number] | null => {
 
 const boatName = (b: any) => b.name ?? b.nom ?? b.matricule ?? "Bateau";
 const boatState = (b: any) => String(b.state ?? b.etat ?? b.status ?? b.statut ?? "—");
+const isMaint = (b: any) => /maint/i.test(boatState(b));
+
+// Variation (%) entre les deux derniers points d'une série réelle
+const trendOf = (arr: number[]): { pct: number } | null => {
+  if (arr.length < 2) return null;
+  const prev = arr[arr.length - 2];
+  const last = arr[arr.length - 1];
+  if (!prev) return null;
+  return { pct: ((last - prev) / prev) * 100 };
+};
+const fmtPct = (p: number) => `${p > 0 ? "+" : ""}${p.toFixed(1).replace(".", ",")}%`;
 
 const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [revenuePeriod, setRevenuePeriod] = useState("mensuelle");
@@ -90,7 +103,11 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [weatherErr, setWeatherErr] = useState(false);
   const [insight, setInsight] = useState<Insight | null>(null);
   const [aiBusy, setAiBusy] = useState(false);
+  const [showDetail, setShowDetail] = useState(false);
+  const [tab, setTab] = useState<Tab>("Recettes");
+  const [selectedBoat, setSelectedBoat] = useState<number | null>(null);
   const [loadedAt] = useState(() => new Date());
+  const [now, setNow] = useState(() => new Date());
 
   const cashMouvement = useSelector((state: RootState) => state.stJude.cashMouvement);
   const trip = useSelector((state: RootState) => state.stJude.trip);
@@ -101,6 +118,12 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       ((state.stJude as any).goods ?? (state.stJude as any).goodsList ?? (state.stJude as any).marchandise ?? []) as any[],
   );
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
+
+  // Horloge en direct
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     setRevenueDataSets(generateRevenueDataSets(cashMouvement));
@@ -121,8 +144,10 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const currentData: any[] = (revenueDataSets[revenuePeriod as keyof typeof revenueDataSets] || revenueDataSets.mensuelle) as any[];
   const revNumbers = currentData.map((d) => Number(d.revenus));
   const revTotal = revNumbers.reduce((s, v) => s + v, 0);
-  const revAvg = revNumbers.length ? revTotal / revNumbers.length : 0;
   const revBest = currentData.reduce((b, d) => (b && Number(b.revenus) >= Number(d.revenus) ? b : d), null as any);
+  const hasResSeries = currentData.some((d) => d.reservations != null);
+  const monthly: any[] = (revenueDataSets.mensuelle as any[]) ?? [];
+  const caTrend = trendOf(monthly.map((d) => Number(d.revenus)));
 
   // Prévision : régression linéaire sur la série réelle des revenus
   const forecast = useMemo(() => {
@@ -171,18 +196,21 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
     return { total, items: top.map(([name, value], i) => ({ name, value, color: GOODS_COLORS[i % GOODS_COLORS.length] })) };
   }, [goods]);
 
+  const seaRisk = weather ? (weather.wave != null && weather.wave > 2) || weather.windKmh > 40 : false;
+
   // Alertes locales calculées sur les vraies données (repli si l'IA est indisponible)
   const localAlerts = useMemo<Alert[]>(() => {
     const out: Alert[] = [];
-    if (unpaidCount > 0) out.push({ t: "Paiements en attente", s: `${unpaidCount} réservation(s) avec un solde à payer : ${formatCurrency(unpaid)}`, lvl: "Moyen" });
-    boats.filter((b) => /maint/i.test(boatState(b))).forEach((b) => out.push({ t: "Bateau en maintenance", s: `${boatName(b)} est en maintenance. Vérifiez sa disponibilité avant de planifier un voyage.`, lvl: "Moyen" }));
-    if (solde < 0) out.push({ t: "Solde net négatif", s: `Les débits dépassent les crédits de ${formatCurrency(Math.abs(solde))}`, lvl: "Élevé" });
+    if (unpaidCount > 0) out.push({ t: "Paiements en attente", s: `${unpaidCount} réservation(s) avec un solde à payer : ${formatCurrency(unpaid)}`, lvl: "Moyen", a: "Relancer les clients concernés" });
+    boats.filter(isMaint).forEach((b) => out.push({ t: "Anticiper la maintenance", s: `Le bateau "${boatName(b)}" est en maintenance.`, lvl: "Moyen", a: "Vérifier la disponibilité avant de planifier un voyage" }));
+    if (solde < 0) out.push({ t: "Solde net négatif", s: `Les débits dépassent les crédits de ${formatCurrency(Math.abs(solde))}`, lvl: "Élevé", a: "Revoir les dépenses" });
     if (worstRoute && bestRoute && worstRoute.ca < bestRoute.ca * 0.25) {
-      out.push({ t: "Trajet peu rentable", s: `${worstRoute.name} : ${formatCurrency(worstRoute.ca)} pour ${worstRoute.n} réservation(s).`, lvl: "Faible" });
+      out.push({ t: "Optimiser les prix", s: `${worstRoute.name} : ${formatCurrency(worstRoute.ca)} pour ${worstRoute.n} réservation(s).`, lvl: "Faible", a: "Réviser les tarifs ou proposer des offres" });
     }
+    if (seaRisk) out.push({ t: "Surveiller la météo", s: "Vent fort ou mer agitée à Toamasina.", lvl: "Moyen", a: "Informer les clients et ajuster les départs" });
     return out.slice(0, 4);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [unpaidCount, unpaid, boats, solde, routeStats]);
+  }, [unpaidCount, unpaid, boats, solde, routeStats, seaRisk]);
 
   // ---------- Analyse IA des données réelles
   const signature = `${cashMouvement.length}-${reservation.length}-${trip.length}-${boats.length}-${totalCredit}-${totalDebit}`;
@@ -197,18 +225,22 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       trajets: routeStats.slice(0, 5),
     };
     const prompt = `Tu es l'IA d'analyse de SAINT-JUDE (transport maritime, Madagascar, montants en Ar). Données réelles: ${JSON.stringify(data)}.
-Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phrases maximum","alertes":[{"titre":"","detail":"","niveau":"Faible|Moyen|Élevé"}]}. 4 alertes maximum. N'invente aucune donnée absente.`;
-    askAIJson<{ analyse: string; prevision: string; alertes: { titre: string; detail: string; niveau: string }[] }>(prompt).then((r) => {
+Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phrases maximum","facteurs":["3 facteurs maximum, déduits des données"],"alertes":[{"titre":"","detail":"","action":"","niveau":"Faible|Moyen|Élevé"}]}. 4 alertes maximum. N'invente aucune donnée absente.`;
+    askAIJson<{ analyse: string; prevision: string; facteurs?: string[]; alertes: { titre: string; detail: string; action?: string; niveau: string }[] }>(prompt).then((r) => {
       if (off) return;
       if (r && typeof r.analyse === "string") {
         setInsight({
           analyse: r.analyse,
           prevision: r.prevision ?? "",
-          alertes: (r.alertes ?? []).slice(0, 4).map((a) => ({ t: a.titre, s: a.detail, lvl: (["Faible", "Moyen", "Élevé"].includes(a.niveau) ? a.niveau : "Moyen") as Level })),
+          facteurs: (r.facteurs ?? []).slice(0, 3),
+          alertes: (r.alertes ?? []).slice(0, 4).map((a) => ({
+            t: a.titre, s: a.detail, a: a.action,
+            lvl: (["Faible", "Moyen", "Élevé"].includes(a.niveau) ? a.niveau : "Moyen") as Level,
+          })),
         });
       } else setInsight(null);
       setAiBusy(false);
-    });
+    }).catch(() => { if (!off) { setInsight(null); setAiBusy(false); } });
     return () => { off = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [signature]);
@@ -236,7 +268,11 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
           days: [1, 2, 3].map((i) => {
             const x = wmo(f.daily.weather_code[i]);
             const dt = new Date(f.daily.time[i]);
-            return { d: dt.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit" }), t: `${Math.round(f.daily.temperature_2m_min[i])}° / ${Math.round(f.daily.temperature_2m_max[i])}°`, label: x.label, Icon: x.Icon };
+            return {
+              d: capitalizeWords(dt.toLocaleDateString("fr-FR", { weekday: "short", day: "2-digit", month: "2-digit" }).replace(".", "")),
+              t: `${Math.round(f.daily.temperature_2m_min[i])}° / ${Math.round(f.daily.temperature_2m_max[i])}°`,
+              label: x.label, Icon: x.Icon,
+            };
           }),
         });
       } catch {
@@ -246,12 +282,14 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     return () => { off = true; };
   }, []);
 
-  const seaRisk = weather ? (weather.wave != null && weather.wave > 2) || weather.windKmh > 40 : false;
   const boatsWithGps = boats.filter((b) => boatPos(b)).length;
+  const gpsIndex = selectedBoat ?? boats.findIndex((b) => boatPos(b));
+  const gpsBoat = gpsIndex >= 0 ? boats[gpsIndex] : null;
+  const gpsBoatPos = gpsBoat ? boatPos(gpsBoat) : null;
   const updatedLabel = loadedAt.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
-  const stats = [
-    { title: "Chiffre d'affaires total", value: formatCurrency(totalCredit), sub: "Total encaissé", icon: TrendingUp, bg: "bg-[#0f9d78]" },
+  const stats: { title: string; value: string; icon: LucideIcon; bg: string; sub: string; trend?: { pct: number } | null }[] = [
+    { title: "Chiffre d'affaires total", value: formatCurrency(totalCredit), sub: "Total encaissé", icon: TrendingUp, bg: "bg-[#0f9d78]", trend: caTrend },
     { title: "Total des dépenses", value: formatCurrency(totalDebit), sub: "Total dépensé", icon: Wallet, bg: "bg-[#ef4444]" },
     { title: "Réservations totales", value: String(reservation.length), sub: `dont ${cancelled} annulée(s)`, icon: CalendarDays, bg: "bg-[#7c3aed]" },
     { title: "Voyages effectués", value: String(trip.length), sub: "Voyages enregistrés", icon: Ship, bg: "bg-[#1d6fe0]" },
@@ -290,9 +328,17 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     URL.revokeObjectURL(url);
   };
 
-  const now = new Date();
-  const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const dateLabel = capitalizeWords(now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" }));
   const roleLabel = currentUser?.role === "Propriétaire" ? "Administrateur" : currentUser?.role ?? "Admin";
+
+  const tabs: Tab[] = ["Demande", "Prix", "Recettes", "Marchandises"];
+  const tabTitle: Record<Tab, string> = {
+    Demande: "Nombre de réservations par période",
+    Prix: "Prix moyen par réservation et par trajet (Ar)",
+    Recettes: "Prévision du chiffre d'affaires (période suivante)",
+    Marchandises: "Poids transporté par catégorie (kg)",
+  };
+  const emptyChart = <p className="text-xs text-gray-500 py-16 text-center">Pas assez de données pour ce graphique.</p>;
 
   return (
     <div className="p-5 bg-[#f3f7fd] min-h-full space-y-4 text-[#10285e]">
@@ -307,9 +353,10 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             <ShieldCheck size={16} /> Audit Logs
           </button>
         )}
-        <div className="w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
+        {/* Cloche sans pastille : aucun compteur fictif */}
+        <button type="button" aria-label="Notifications" className="w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
           <Bell size={18} />
-        </div>
+        </button>
         <div className="flex items-center gap-2 bg-white border border-[#dbe5f5] rounded-full pl-1 pr-3 py-1">
           <div className="w-8 h-8 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={18} /></div>
           <div className="leading-tight"><p className="text-xs font-semibold">{roleLabel}</p><p className="text-[10px] text-gray-500">Admin</p></div>
@@ -317,7 +364,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
         <div className="flex items-center gap-2 bg-white border border-[#dbe5f5] rounded-xl px-3 py-1.5 text-xs">
           <Calendar size={20} className="text-[#1255d6]" />
-          <div><p className="font-semibold capitalize">{dateLabel}</p><p>{pad(now.getHours())}:{pad(now.getMinutes())}</p></div>
+          <div><p className="font-semibold">{dateLabel}</p><p>{pad(now.getHours())}:{pad(now.getMinutes())}</p></div>
         </div>
       </div>
 
@@ -334,13 +381,23 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
         {stats.map((s) => {
           const Icon = s.icon;
+          const t = s.trend;
+          const up = t ? t.pct > 0 : false;
+          const flat = t ? Math.abs(t.pct) < 0.05 : false;
           return (
             <div key={s.title} className={`${card} p-4 flex items-center gap-3`}>
               <div className={`w-14 h-14 rounded-full ${s.bg} text-white flex items-center justify-center shrink-0`}><Icon size={26} /></div>
               <div className="min-w-0">
                 <p className="text-xs font-semibold">{s.title}</p>
                 <p className="text-2xl font-extrabold leading-tight truncate text-[#1255d6]">{s.value}</p>
-                <p className="text-[11px] text-gray-500">{s.sub}</p>
+                {t ? (
+                  <p className={`text-[11px] flex items-center gap-1 ${flat ? "text-gray-500" : up ? "text-[#0f9d78]" : "text-[#e5342f]"}`}>
+                    {flat ? <Minus size={12} /> : up ? <TrendingUp size={12} /> : <TrendingDown size={12} />}
+                    <b>{fmtPct(t.pct)}</b> <span className="text-gray-500">vs mois précédent</span>
+                  </p>
+                ) : (
+                  <p className="text-[11px] text-gray-500">{s.sub}</p>
+                )}
               </div>
             </div>
           );
@@ -351,7 +408,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
       <div className="grid grid-cols-1 xl:grid-cols-[1.3fr_1fr_1fr_0.95fr] gap-3">
         <div className={`${card} p-4`}>
           <div className="flex items-start justify-between">
-            <div><h3 className="font-bold">Évolution du chiffre d'affaires</h3><p className="text-[11px] text-gray-500">En milliers d'Ar</p></div>
+            <div><h3 className="font-bold">Évolution du chiffre d'affaires{hasResSeries ? " et des réservations" : ""}</h3><p className="text-[11px] text-gray-500">Montants en Ar</p></div>
             <select value={revenuePeriod} onChange={(e) => setRevenuePeriod(e.target.value)} className="border rounded-md text-xs px-2 py-1 bg-[#f8fafd]">
               <option value="hebdomadaire">Hebdomadaire</option>
               <option value="mensuelle">Mensuelle</option>
@@ -361,20 +418,23 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             </select>
           </div>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={currentData} margin={{ top: 20 }}>
+            <ComposedChart data={currentData} margin={{ top: 20, right: hasResSeries ? 0 : 10 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
               <XAxis dataKey="periode" tick={{ fontSize: 10 }} />
-              <YAxis tick={{ fontSize: 10 }} />
-              <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} Mille MGA`, "Chiffre d'affaires"]} />
-              <Bar dataKey="revenus" fill="#1d6fe0" radius={[3, 3, 0, 0]}>
-                <LabelList dataKey="revenus" position="top" style={{ fontSize: 10, fontWeight: 700 }} />
+              <YAxis yAxisId="ca" tick={{ fontSize: 10 }} tickFormatter={(v: number) => compact(v * 1000)} />
+              {hasResSeries && <YAxis yAxisId="n" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} />}
+              <RechartsTooltip formatter={(v: number | string, name: string) => [name === "Réservations" ? v : formatCurrency(Number(v) * 1000), name]} />
+              <Legend wrapperStyle={{ fontSize: 10 }} />
+              <Bar yAxisId="ca" dataKey="revenus" name="Chiffre d'affaires (Ar)" fill="#1d6fe0" radius={[3, 3, 0, 0]}>
+                {!hasResSeries && <LabelList dataKey="revenus" position="top" style={{ fontSize: 10, fontWeight: 700 }} />}
               </Bar>
-            </BarChart>
+              {hasResSeries && <Line yAxisId="n" type="monotone" dataKey="reservations" name="Réservations" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />}
+            </ComposedChart>
           </ResponsiveContainer>
           <div className="grid grid-cols-3 gap-2 text-[10px]">
-            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Revenu moyen par période</p><p className="font-bold text-[#1255d6] text-xs">{revAvg.toFixed(1)} Mille Ar</p></div>
+            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Revenu moyen par réservation</p><p className="font-bold text-[#1255d6] text-xs">{reservation.length ? formatCurrency(totalCredit / reservation.length) : "—"}</p></div>
             <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Panier moyen</p><p className="font-bold text-[#1255d6] text-xs">{reservation.length ? formatCurrency(payTotal / reservation.length) : "—"}</p></div>
-            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Meilleure période</p><p className="font-bold text-[#1255d6] text-xs">{revBest ? `${revBest.periode} (${Number(revBest.revenus).toFixed(1)} Mille Ar)` : "—"}</p></div>
+            <div className="border rounded-md p-2 bg-[#f8fafd]"><p className="text-gray-500">Meilleure période</p><p className="font-bold text-[#1255d6] text-xs">{revBest ? `${revBest.periode} (${formatCurrency(Number(revBest.revenus) * 1000)})` : "—"}</p></div>
           </div>
         </div>
 
@@ -414,7 +474,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         <div className={`${card} p-4`}>
           <h3 className="font-bold flex items-center gap-2"><Navigation size={16} className="text-[#1255d6]" /> Suivi GPS des bateaux</h3>
           <p className="text-[11px] text-gray-500 mb-2">Dernières positions enregistrées</p>
-          <div className="rounded-lg bg-[#d9ecfb] border h-[190px] overflow-hidden">
+          <div className="relative rounded-lg bg-[#d9ecfb] border h-[250px] overflow-hidden">
             <svg viewBox="0 0 160 290" className="w-full h-full">
               <path d={MADA_PATH} fill="#e6efd9" stroke="#7fa36a" strokeWidth="0.8" strokeLinejoin="round" />
               {CITIES.map((c) => {
@@ -430,9 +490,9 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                 const p = boatPos(b);
                 if (!p) return null;
                 const [x, y] = proj(p[0], p[1]);
-                const maint = /maint/i.test(boatState(b));
+                const maint = isMaint(b);
                 return (
-                  <g key={i}>
+                  <g key={i} onClick={() => setSelectedBoat(i)} style={{ cursor: "pointer" }}>
                     <circle cx={x} cy={y} r={6} fill={maint ? "#ef4444" : "#22c55e"} fillOpacity={0.25} />
                     <circle cx={x} cy={y} r={3} fill={maint ? "#ef4444" : "#22c55e"} stroke="#fff" strokeWidth="1" />
                     <text x={x + 6} y={y - 5} fontSize="7" fontWeight="700" fill="#10285e">{boatName(b)}</text>
@@ -440,24 +500,16 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                 );
               })}
             </svg>
+            {gpsBoat && (
+              <div className="absolute right-2 bottom-2 bg-white rounded-lg shadow-md border border-[#dbe5f5] p-2 text-[10px] max-w-[150px]">
+                <p className="font-bold text-xs truncate">{boatName(gpsBoat)}</p>
+                <p className={`font-semibold ${isMaint(gpsBoat) ? "text-orange-500" : "text-green-600"}`}>{boatState(gpsBoat)}</p>
+                <p className="text-gray-500">{gpsBoatPos ? `Position : ${gpsBoatPos[1].toFixed(2)} / ${gpsBoatPos[0].toFixed(2)}` : "GPS non renseigné"}</p>
+              </div>
+            )}
           </div>
-          <div className="mt-2 space-y-1.5 max-h-[84px] overflow-y-auto">
-            {boats.length === 0 && <p className="text-xs text-gray-500 text-center">Aucun bateau enregistré.</p>}
-            {boats.map((b, i) => {
-              const st = boatState(b);
-              const maint = /maint/i.test(st);
-              const p = boatPos(b);
-              return (
-                <div key={i} className="border rounded-lg px-2 py-1 text-[10px] bg-[#f8fafd] flex items-center gap-2">
-                  <i className={`w-2 h-2 rounded-full inline-block shrink-0 ${maint ? "bg-red-500" : "bg-green-500"}`} />
-                  <b className="text-xs">{boatName(b)}</b>
-                  <span className={`font-semibold ${maint ? "text-orange-500" : "text-green-600"}`}>{st}</span>
-                  <span className="ml-auto text-gray-500">{p ? `${p[1].toFixed(2)} / ${p[0].toFixed(2)}` : "GPS non renseigné"}</span>
-                </div>
-              );
-            })}
-          </div>
-          <div className="flex gap-3 text-[10px] mt-2">
+          {boats.length === 0 && <p className="text-xs text-gray-500 text-center mt-2">Aucun bateau enregistré.</p>}
+          <div className="flex gap-4 text-[10px] mt-2 justify-center">
             <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-green-500 inline-block" />Bateau en route</span>
             <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-red-500 inline-block" />Bateau à l'arrêt</span>
           </div>
@@ -482,13 +534,18 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
               <div className="grid grid-cols-3 gap-1.5">
                 {weather.days.map((f) => (
                   <div key={f.d} className="border rounded-md p-1.5 text-center text-[9px] bg-[#f8fafd]">
-                    <p className="font-semibold capitalize">{f.d}</p><f.Icon size={16} className="mx-auto my-1 text-[#1255d6]" /><p>{f.t}</p><p className="text-gray-500">{f.label}</p>
+                    <p className="font-semibold">{f.d}</p><f.Icon size={16} className="mx-auto my-1 text-[#1255d6]" /><p>{f.t}</p><p className="text-gray-500">{f.label}</p>
                   </div>
                 ))}
               </div>
               <div className={`mt-3 flex items-start gap-2 rounded-lg p-2.5 text-[10px] ${seaRisk ? "bg-[#fff0d9] text-[#b45309]" : "bg-[#e8f1ff] text-[#1255d6]"}`}>
                 <Info size={14} className="shrink-0 mt-0.5" />
-                <p>{seaRisk ? "Prudence : vent fort ou mer agitée, adaptez les départs." : "Les conditions sont favorables à la navigation."}</p>
+                <div>
+                  <p>{seaRisk ? "Prudence : vent fort ou mer agitée, adaptez les départs." : "Les conditions sont favorables à la navigation."}</p>
+                  <a href="https://open-meteo.com/en/docs/marine-weather-api" target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 font-semibold underline">
+                    Voir détails météo <ArrowRight size={10} />
+                  </a>
+                </div>
               </div>
             </>
           )}
@@ -503,18 +560,19 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             <p className="text-xs text-gray-500 py-10 text-center">Aucune réservation à analyser.</p>
           ) : (
             <div className="grid grid-cols-[1.6fr_1fr] gap-2">
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveContainer width="100%" height={220}>
                 <ComposedChart data={routeStats.slice(0, 6)} margin={{ top: 10, right: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
                   <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
                   <YAxis yAxisId="ca" tick={{ fontSize: 9 }} tickFormatter={compact} />
                   <YAxis yAxisId="n" orientation="right" tick={{ fontSize: 9 }} allowDecimals={false} />
                   <RechartsTooltip formatter={(v: number | string, name: string) => [name === "Chiffre d'affaires" ? formatCurrency(Number(v)) : v, name]} />
+                  <Legend wrapperStyle={{ fontSize: 9 }} />
                   <Bar yAxisId="ca" dataKey="ca" name="Chiffre d'affaires" fill="#1d6fe0" radius={[3, 3, 0, 0]} />
-                  <Line yAxisId="n" type="monotone" dataKey="n" name="Réservations" stroke="#f59e0b" strokeWidth={2} />
+                  <Line yAxisId="n" type="monotone" dataKey="n" name="Nombre de réservations" stroke="#f59e0b" strokeWidth={2} dot={{ r: 3 }} />
                 </ComposedChart>
               </ResponsiveContainer>
-              <div className="space-y-3 text-[10px]">
+              <div className="space-y-4 text-[10px]">
                 <div>
                   <p className="font-semibold flex items-center gap-1"><Trophy size={12} className="text-[#f59e0b]" /> Trajet le plus rentable</p>
                   <p className="font-bold text-xs mt-1">{bestRoute.name}</p>
@@ -540,23 +598,84 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             <h3 className="font-bold text-sm flex-1">Data Science <span className="text-gray-500 font-normal">— Prévisions & Tendances</span></h3>
             <span className="text-[10px] text-gray-500">{aiBusy ? "Analyse IA en cours…" : insight ? "Analyse IA" : "Calcul local"}</span>
           </div>
-          <p className="text-[11px] font-semibold mb-1">Prévision du chiffre d'affaires (période suivante)</p>
+          <div className="flex flex-wrap gap-1.5 mb-2">
+            {tabs.map((t) => (
+              <button key={t} onClick={() => setTab(t)} className={`text-[10px] px-3 py-1 rounded-md border ${tab === t ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-[#f8fafd] text-[#10285e] border-[#dbe5f5]"}`}>
+                {t}
+              </button>
+            ))}
+          </div>
+          <p className="text-[11px] font-semibold mb-1">{tabTitle[tab]}</p>
           <div className="grid grid-cols-[1.3fr_1fr] gap-3">
-            <ResponsiveContainer width="100%" height={190}>
-              <AreaChart data={forecast.data} margin={{ left: -15 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
-                <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
-                <YAxis tick={{ fontSize: 9 }} />
-                <RechartsTooltip />
-                <Legend wrapperStyle={{ fontSize: 10 }} />
-                <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
-                <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
-              </AreaChart>
-            </ResponsiveContainer>
+            <div>
+              {tab === "Recettes" && (
+                <ResponsiveContainer width="100%" height={190}>
+                  <AreaChart data={forecast.data} margin={{ left: -15 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
+                    <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
+                    <YAxis tick={{ fontSize: 9 }} tickFormatter={(v: number) => compact(v * 1000)} />
+                    <RechartsTooltip formatter={(v: number | string, name: string) => [formatCurrency(Number(v) * 1000), name]} />
+                    <Legend wrapperStyle={{ fontSize: 10 }} />
+                    <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
+                    <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              )}
+              {tab === "Demande" && (hasResSeries ? (
+                <ResponsiveContainer width="100%" height={190}>
+                  <AreaChart data={currentData} margin={{ left: -15 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
+                    <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
+                    <YAxis tick={{ fontSize: 9 }} allowDecimals={false} />
+                    <RechartsTooltip />
+                    <Area type="monotone" dataKey="reservations" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réservations" />
+                  </AreaChart>
+                </ResponsiveContainer>
+              ) : emptyChart)}
+              {tab === "Prix" && (routeStats.length ? (
+                <ResponsiveContainer width="100%" height={190}>
+                  <BarChart data={routeStats.slice(0, 6).map((r) => ({ name: r.name, prix: Math.round(r.ca / r.n) }))} margin={{ left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
+                    <YAxis tick={{ fontSize: 9 }} tickFormatter={compact} />
+                    <RechartsTooltip formatter={(v: number | string) => [formatCurrency(Number(v)), "Prix moyen"]} />
+                    <Bar dataKey="prix" fill="#7c3aed" radius={[3, 3, 0, 0]} />
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : emptyChart)}
+              {tab === "Marchandises" && (goodsStats.total ? (
+                <ResponsiveContainer width="100%" height={190}>
+                  <BarChart data={goodsStats.items} margin={{ left: -10 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
+                    <XAxis dataKey="name" tick={{ fontSize: 9 }} />
+                    <YAxis tick={{ fontSize: 9 }} tickFormatter={compact} />
+                    <RechartsTooltip formatter={(v: number | string) => [`${Number(v).toLocaleString()} kg`, "Poids"]} />
+                    <Bar dataKey="value" radius={[3, 3, 0, 0]}>
+                      {goodsStats.items.map((e) => <Cell key={e.name} fill={e.color} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : emptyChart)}
+            </div>
             <div className="rounded-lg bg-[#eef4ff] p-3 text-[11px] space-y-2">
               <p className="font-bold text-[#1255d6] flex items-center gap-1.5"><Brain size={14} /> Insights IA</p>
-              <p className="text-gray-700">{insight?.analyse || (revNumbers.length ? `Revenu total sur la période : ${revTotal.toFixed(1)} Mille Ar.` : "Pas assez de données pour analyser.")}</p>
-              <p className="text-gray-700">{insight?.prevision || (forecast.next != null ? `Tendance : prochain point estimé à ${forecast.next.toFixed(1)} Mille Ar (régression linéaire).` : "")}</p>
+              <p className="text-gray-700">{insight?.analyse || (revNumbers.length ? `Revenu total sur la période : ${formatCurrency(revTotal * 1000)}.` : "Pas assez de données pour analyser.")}</p>
+              {showDetail && (
+                <p className="text-gray-700">{insight?.prevision || (forecast.next != null ? `Tendance : prochain point estimé à ${formatCurrency(forecast.next * 1000)} (régression linéaire).` : "")}</p>
+              )}
+              {insight && insight.facteurs.length > 0 && (
+                <div>
+                  <p className="font-semibold">Facteurs identifiés :</p>
+                  <ul className="mt-1 space-y-1">
+                    {insight.facteurs.map((f, i) => (
+                      <li key={i} className="flex items-start gap-1.5 text-gray-700"><i className="w-1.5 h-1.5 rounded-full bg-green-500 inline-block mt-1.5 shrink-0" />{f}</li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              <button onClick={() => setShowDetail((v) => !v)} className="w-full flex items-center justify-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-[11px] font-semibold rounded-md py-1.5">
+                {showDetail ? "Masquer l'analyse détaillée" : "Voir l'analyse détaillée"} <ArrowRight size={12} />
+              </button>
             </div>
           </div>
         </div>
@@ -578,7 +697,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
 
         <div className={`${card} p-4 xl:col-span-2`}>
-          <h3 className="font-bold text-sm flex items-center gap-2 mb-3"><Lightbulb size={16} className="text-[#f59e0b]" /> Recommandations & alertes de l'IA</h3>
+          <h3 className="font-bold text-sm flex items-center gap-2 mb-3"><Lightbulb size={16} className="text-[#f59e0b]" /> Recommandations de l'IA</h3>
           {alerts.length === 0 ? (
             <p className="text-xs text-gray-500 py-4 text-center">Aucune recommandation pour le moment.</p>
           ) : (
@@ -588,7 +707,11 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                 return (
                   <div key={i} className="border rounded-xl p-3 flex items-start gap-2 text-[11px] bg-[#f8fafd]">
                     <span className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 ${c}`}><Icon size={16} /></span>
-                    <div><p className={`font-semibold ${tc}`}>{a.t}</p><p className="text-gray-600">{a.s}</p></div>
+                    <div>
+                      <p className={`font-semibold ${tc}`}>{a.t}</p>
+                      <p className="text-gray-600">{a.s}</p>
+                      {a.a && <p className="text-[#1255d6] font-semibold mt-1 flex items-center gap-1"><ArrowRight size={10} />{a.a}</p>}
+                    </div>
                   </div>
                 );
               })}
