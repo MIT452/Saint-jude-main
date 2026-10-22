@@ -14,36 +14,12 @@ import {
   Zap,
   ClipboardList,
 } from "lucide-react";
-import { askAssistant } from "../data/intelligenceService";
 import type { ReservationRecord } from "../services/reservationService";
+import { agentCancel, agentChat, agentConfirm, type PendingView } from "../services/agentService";
 import { formatCurrency } from "../Tools/Tools";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
-import {
-  DAYS,
-  GUIDED,
-  GUIDED_CHOICES,
-  correctionNote,
-  detectIntent,
-  draftRows,
-  getPoidsTotal,
-  hasInfo,
-  inferKind,
-  iso,
-  mergeDraft,
-  nextQuestion,
-  parseDate,
-  parseDateInfo,
-  formatDateLong,
-  pluralUnit,
-  strip,
-  summarize,
-  wordsToDigits,
-  type Field,
-  type RequestKind,
-  type ReservationDraft,
-  type ReservationQuote,
-} from "./reservationParser";
+import { detectIntent, strip } from "./reservationParser";
 
 // Les types restent importables depuis ce fichier, comme avant
 export type { ReservationDraft, ReservationQuote } from "./reservationParser";
@@ -62,68 +38,26 @@ const getErrorMessage = (error: unknown) =>
 const nowLabel = () =>
   new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
 
-/* =========================================================
-   Statuts (voir la logique Saint-Jude)
-   - Statut de RÉSERVATION : En attente / Confirmée / Annulée
-   - Statut de PAIEMENT    : Crédit / Partiellement payé / Payé
-   Le montant payé détermine le statut du paiement, pas celui de la réservation.
-   Le calcul officiel est fait par le BACKEND ; ce fichier ne sert qu'à l'affichage.
-========================================================= */
-type PaymentStatus = "CREDIT" | "PARTIAL" | "PAID";
-
-const PAYMENT_LABEL: Record<PaymentStatus, string> = {
-  CREDIT: "Crédit",
-  PARTIAL: "Partiellement payé",
-  PAID: "Payé",
-};
-
-function getPaymentStatus(amountPaid: number, totalAmount: number): PaymentStatus {
-  if (amountPaid < 0 || totalAmount < 0) {
-    throw new Error("Montant invalide");
-  }
-  if (amountPaid === 0) return "CREDIT";
-  if (amountPaid < totalAmount) return "PARTIAL";
-  return "PAID";
-}
-
-// Statut de paiement lisible, uniquement si le backend renvoie le montant payé
-function readPaymentLabel(record: ReservationRecord): string | null {
-  const data = record as unknown as Record<string, unknown>;
-  if (data.amountPaid === undefined || data.amountPaid === null) return null;
-  const paid = Number(data.amountPaid);
-  const total = Number(data.totalPrice);
-  if (!Number.isFinite(paid) || !Number.isFinite(total)) return null;
-  try {
-    return PAYMENT_LABEL[getPaymentStatus(paid, total)];
-  } catch {
-    return null;
-  }
-}
-
 const isCancelled = (status?: string) => strip(status ?? "").includes("annul");
 
 /* =========================================================
    Composant
+   Toute la conversation (collecte, vérification du trajet, tarif, mémoire) est gérée
+   par l'agent du backend (/api/ai/agent). Ce composant affiche, écoute, parle,
+   et déclenche les actions humaines : Confirmer / Annuler.
 ========================================================= */
 export interface AssistantChatProps {
-  /** Réservation actuellement sélectionnée (contexte + annulation). */
+  /** Réservation actuellement sélectionnée (annulation d'une réservation existante). */
   reservation?: ReservationRecord;
   onReservationCreated?: (reservation: ReservationRecord) => void;
   /** Appelé après une annulation (réservation mise à jour par le backend). */
   onReservationUpdated?: (reservation: ReservationRecord) => void;
-  /** Ports / destinations connus (ex: noms des trajets) pour une détection fiable. */
-  knownPlaces?: string[];
-  /** Backend : vérifie trajet, capacité et tarif réels (avant le récapitulatif). */
-  verifyReservation?: (draft: ReservationDraft) => Promise<ReservationQuote>;
-  /** Backend : crée vraiment la réservation et détermine ses statuts. */
-  createReservation?: (draft: ReservationDraft) => Promise<ReservationRecord>;
   /** Backend : passe la réservation à « Annulée » sans effacer les paiements. */
   cancelReservation?: (reservationId: string) => Promise<ReservationRecord>;
-}
-
-interface RecapData {
-  rows: Array<[string, string]>;
-  price: string;
+  /** Anciennes props : conservées pour ne pas casser la page parente, désormais inutiles. */
+  knownPlaces?: string[];
+  verifyReservation?: unknown;
+  createReservation?: unknown;
 }
 
 interface ChatMessage {
@@ -131,24 +65,15 @@ interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   time: string;
-  /** Boutons de réponse rapide affichés sous le dernier message de l'assistant. */
   choices?: string[];
-  /** Carte récapitulatif (avant confirmation). */
-  recap?: RecapData;
-  /** Message de succès (réservation enregistrée / annulée). */
   success?: boolean;
-  /** Message d'accueil avec la liste d'exemples. */
   welcome?: boolean;
 }
 
 interface PushOptions {
   choices?: string[];
-  recap?: RecapData;
   success?: boolean;
 }
-
-const HELP =
-  "Je peux préparer une réservation : dites-moi librement ce que vous souhaitez (billet passager ou envoi de marchandises, ports, date, quantité, poids), dans l’ordre que vous voulez. Je vous demande seulement ce qui manque, une information à la fois, puis je vérifie le trajet, la capacité et le tarif, et je vous présente un récapitulatif. La réservation n’est enregistrée qu’après votre confirmation et la validation par le système.";
 
 const WELCOME_EXAMPLES = [
   "Quelle est la disponibilité du bateau Arcanum ?",
@@ -156,12 +81,11 @@ const WELCOME_EXAMPLES = [
   "Comment ajouter une nouvelle réservation ?",
 ];
 
-// Suggestions rapides (comme sur la capture)
 const QUICK_SUGGESTIONS: Array<{ label: string; message: string; icon: typeof Ship }> = [
   { label: "Vérifier un autre bateau", message: "Vérifier la disponibilité d'un autre bateau", icon: Ship },
   { label: "Voir les réservations en attente", message: "Montre-moi les réservations en attente", icon: ClipboardList },
   { label: "Ajouter une réservation", message: "Je veux faire une réservation", icon: PlusSquare },
-  { label: "Aide / Guide", message: "aide", icon: HelpCircle },
+  { label: "Aide / Guide", message: "Comment ça marche ?", icon: HelpCircle },
 ];
 
 const makeWelcome = (): ChatMessage => ({
@@ -176,36 +100,32 @@ export default function AssistantChat({
   reservation,
   onReservationCreated,
   onReservationUpdated,
-  knownPlaces = [],
-  verifyReservation,
-  createReservation,
   cancelReservation,
 }: AssistantChatProps) {
   const [messages, setMessages] = useState<ChatMessage[]>(() => [makeWelcome()]);
   const [question, setQuestion] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [listening, setListening] = useState(false);
+  const [pending, setPending] = useState<PendingView | null>(null);
 
-  const draftRef = useRef<ReservationDraft>({});
-  const collecting = useRef(false); // une demande de réservation est en cours de collecte
-  const awaitingConfirm = useRef(false); // récapitulatif présenté, attente de « oui »
-  const awaitingWeight = useRef(false); // question « poids par unité ou total ? » posée
-  const pendingDate = useRef(false); // date relative ambiguë en attente de confirmation
-  const asked = useRef<Field | null>(null); // dernière question posée (pour les réponses courtes)
+  const convIdRef = useRef<string | undefined>(undefined); // identifiant de conversation côté backend
+  const pendingRef = useRef<PendingView | null>(null); // récapitulatif en attente de confirmation
   const pendingCancel = useRef<ReservationRecord | null>(null); // annulation d'une réservation existante
-  const requestKind = useRef<RequestKind | null>(null); // type de demande (passager / marchandise)
   const recognitionRef = useRef<any>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const lastReply = useRef("");
-  const voiceMode = useRef(false); // true tant que l'échange se fait à la voix
+  const voiceMode = useRef(false);
   const submitRef = useRef<(m: string, byVoice: boolean) => Promise<void>>(async () => {});
 
-  // Défilement automatique vers le dernier message
+  const setPend = (p: PendingView | null) => {
+    pendingRef.current = p;
+    setPending(p);
+  };
+
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading]);
+  }, [messages, isLoading, pending]);
 
-  // Arrêt du micro et de la voix quand le composant est démonté
   useEffect(
     () => () => {
       voiceMode.current = false;
@@ -220,26 +140,12 @@ export default function AssistantChat({
     setMessages((c) => [...c, { id: newId(), role, content, time: nowLabel(), ...options }]);
   };
 
-  const hasDraft = () => hasInfo(draftRef.current);
-
-  const resetDraft = () => {
-    draftRef.current = {};
-    collecting.current = false;
-    awaitingConfirm.current = false;
-    awaitingWeight.current = false;
-    pendingDate.current = false;
-    asked.current = null;
-    requestKind.current = null;
-  };
-
-  // Lecture vocale de la réponse (retourne quand la phrase est terminée)
+  /* ---------- Voix ---------- */
   const speak = (text: string) =>
     new Promise<void>((resolve) => {
       if (!("speechSynthesis" in window)) return resolve();
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(
-        text.replace(/[✅•]/g, "").replace(/\n+/g, ". "),
-      );
+      const u = new SpeechSynthesisUtterance(text.replace(/[✅•]/g, "").replace(/\n+/g, ". "));
       u.lang = "fr-FR";
       u.onend = () => resolve();
       u.onerror = () => resolve();
@@ -271,12 +177,8 @@ export default function AssistantChat({
     rec.onend = () => {
       setListening(false);
       const spoken = transcript.trim();
-      if (spoken && voiceMode.current) {
-        // envoi automatique : pas besoin de cliquer sur la flèche
-        void submitRef.current(spoken, true);
-      } else {
-        voiceMode.current = false;
-      }
+      if (spoken && voiceMode.current) void submitRef.current(spoken, true);
+      else voiceMode.current = false;
     };
     recognitionRef.current = rec;
     rec.start();
@@ -285,7 +187,7 @@ export default function AssistantChat({
 
   const toggleMic = () => {
     if (listening) {
-      voiceMode.current = false; // arrêt manuel
+      voiceMode.current = false;
       recognitionRef.current?.stop();
       window.speechSynthesis?.cancel();
       return;
@@ -294,140 +196,33 @@ export default function AssistantChat({
     startListening();
   };
 
-  // Le backend vérifie trajet, capacité et tarif ; puis l'assistant présente le récapitulatif
-  const presentRecap = async () => {
-    asked.current = null;
-    const draft = draftRef.current;
-    const payload: ReservationDraft = { ...draft, poidsTotalKg: getPoidsTotal(draft) };
-
-    let quote: ReservationQuote | undefined;
-    if (verifyReservation) {
-      try {
-        quote = await verifyReservation(payload);
-      } catch (error) {
-        awaitingConfirm.current = false;
-        return push(
-          "assistant",
-          `Je n’ai pas pu vérifier la disponibilité : ${getErrorMessage(error)}. Réessayez dans un instant.`,
-          { choices: ["Réessayer", "Annuler"] },
-        );
-      }
-      if (!quote.available) {
-        awaitingConfirm.current = false;
-        return push(
-          "assistant",
-          `${quote.message ?? "Ce trajet n’est pas disponible pour cette demande."}\nModifiez la date ou le trajet, ou dites « annuler ».`,
-          { choices: ["Annuler"] },
-        );
-      }
-    }
-
-    awaitingConfirm.current = true;
-    const price =
-      quote?.totalPrice !== undefined
-        ? formatCurrency(quote.totalPrice)
-        : "calculé par le système lors de l’enregistrement";
-    push(
-      "assistant",
-      "Voici le récapitulatif de votre réservation. Souhaitez-vous la confirmer ?",
-      {
-        recap: { rows: draftRows(draft), price },
-        choices: ["Oui, confirmer", "Modifier", "Annuler"],
-      },
-    );
-  };
-
-  // Suite de la collecte : UNE question ciblée à la fois, puis vérification backend et récapitulatif
-  const continueCollecting = async (merged: ReservationDraft, prefix = "") => {
-    awaitingWeight.current = false;
-    draftRef.current = merged;
-    if (!requestKind.current) requestKind.current = inferKind(merged);
-
-    const q = nextQuestion(merged, requestKind.current);
-    if (q) {
-      awaitingConfirm.current = false;
-      asked.current = q.field;
-      awaitingWeight.current = q.field === "poidsMode";
-      return push("assistant", `${prefix}${q.text}`, q.choices ? { choices: q.choices } : {});
-    }
-
-    // Tout est connu : on annonce, puis le backend vérifie avant tout résultat
-    asked.current = null;
-    if (verifyReservation) {
-      const total = getPoidsTotal(merged);
-      const what =
-        total !== undefined
-          ? `, ainsi que le tarif correspondant à vos ${total} kg`
-          : merged.passagers
-            ? `, ainsi que le tarif pour ${merged.passagers} passager${merged.passagers > 1 ? "s" : ""}`
-            : "";
+  /* ---------- Actions humaines : Confirmer / Annuler le récapitulatif ---------- */
+  const confirmPending = async () => {
+    const id = convIdRef.current;
+    if (!id) return push("assistant", "Il n’y a rien à confirmer pour le moment.");
+    try {
+      const out = await agentConfirm(id);
+      setPend(null);
+      push("assistant", out.reply, { success: true });
+      // le backend renvoie un résumé de la réservation créée
+      onReservationCreated?.(out.reservation as unknown as ReservationRecord);
+    } catch (error) {
       push(
         "assistant",
-        `${prefix}Très bien, ${formatDateLong(merged.date!)}. Je vais vérifier les possibilités de transport entre ${merged.depart} et ${merged.arrivee} pour cette date${what}.`,
-      );
-    } else if (prefix) {
-      push("assistant", prefix.trim());
-    }
-    return presentRecap();
-  };
-
-  // Démarrage guidé : on garde ce que le client a déjà dit, on pose la question suivante
-  const startGuided = (kind: RequestKind) => {
-    requestKind.current = kind;
-    collecting.current = true;
-    awaitingConfirm.current = false;
-    awaitingWeight.current = false;
-    pendingDate.current = false;
-    const prefix =
-      kind === "passager"
-        ? "Très bien, réservons un billet passager. "
-        : "Très bien, préparons un transport de marchandises. ";
-    return continueCollecting(draftRef.current, prefix);
-  };
-
-  // Création par le backend. L'IA ne dit « enregistrée » qu'après sa réponse.
-  const createFromDraft = async () => {
-    if (!createReservation) {
-      return push(
-        "assistant",
-        "Le récapitulatif est prêt, mais l’enregistrement n’est pas encore branché sur le système (prop createReservation).",
+        `La réservation n’a pas été enregistrée : ${getErrorMessage(error)}`,
+        pendingRef.current ? { choices: ["Oui, confirmer", "Annuler"] } : {},
       );
     }
-    let created: ReservationRecord;
-    try {
-      created = await createReservation({
-        ...draftRef.current,
-        poidsTotalKg: getPoidsTotal(draftRef.current),
-      });
-    } catch (error) {
-      // Rien n'a été enregistré : on garde le brouillon pour réessayer
-      return push(
-        "assistant",
-        `La réservation n’a pas été enregistrée : ${getErrorMessage(error)}.\nDites « oui » pour réessayer ou « annuler ».`,
-        { choices: ["Oui, réessayer", "Annuler"] },
-      );
-    }
-
-    onReservationCreated?.(created);
-    resetDraft();
-
-    const lines = [
-      "Réservation enregistrée par le système.",
-      `• Statut de la réservation : ${created.status}`,
-    ];
-    const payment = readPaymentLabel(created);
-    lines.push(
-      payment
-        ? `• Statut du paiement : ${payment}`
-        : "• Le statut du paiement est calculé par le système selon les montants payés.",
-    );
-    if (Number.isFinite(Number(created.totalPrice))) {
-      lines.push(`• Prix total : ${formatCurrency(Number(created.totalPrice))}`);
-    }
-    push("assistant", lines.join("\n"), { success: true });
   };
 
-  // Annulation d'une réservation EXISTANTE (statut Annulée, paiements conservés)
+  const cancelPending = async () => {
+    const id = convIdRef.current;
+    setPend(null);
+    if (id) await agentCancel(id).catch(() => undefined); // le brouillon expire de toute façon après 30 min
+    push("assistant", "D’accord, rien n’est enregistré.");
+  };
+
+  /* ---------- Annulation d'une réservation EXISTANTE (statut Annulée, paiements conservés) ---------- */
   const cancelExisting = async (target: ReservationRecord) => {
     if (!cancelReservation) {
       pendingCancel.current = null;
@@ -454,14 +249,11 @@ export default function AssistantChat({
     }
   };
 
+  /* ---------- Traitement d'un message ---------- */
   const handle = async (message: string) => {
-    // Démarrage guidé choisi par bouton (« Billet passager » / « Transport de marchandises »)
-    const guided = GUIDED[message];
-    if (guided && !awaitingConfirm.current && !pendingCancel.current) return startGuided(guided);
-
     const intent = detectIntent(message);
 
-    // A. Réponse à une demande d'annulation d'une réservation existante
+    // A. Réponse à « Voulez-vous annuler cette réservation existante ? »
     if (pendingCancel.current) {
       if (intent === "confirmer") return cancelExisting(pendingCancel.current);
       if (intent === "refuser") {
@@ -473,136 +265,31 @@ export default function AssistantChat({
       });
     }
 
-    // A'. Réponse à « Parlez-vous de vendredi 16 octobre ? » (date relative ambiguë)
-    if (pendingDate.current) {
-      pendingDate.current = false;
-      if (intent === "confirmer") return continueCollecting(draftRef.current);
-      if (intent === "refuser" && !parseDate(wordsToDigits(message))) {
-        const d = { ...draftRef.current };
-        delete d.date;
-        return continueCollecting(d); // redemande la date
-      }
-      // sinon (« non, aujourd’hui », « samedi »...) : traité comme une correction plus bas
+    // B. Récapitulatif affiché : « oui » = confirmation de l'utilisateur, « annuler » = abandon.
+    // Tout le reste (« non, plutôt vendredi ») est envoyé à l'agent, qui prépare un nouveau récapitulatif.
+    if (pendingRef.current) {
+      if (intent === "confirmer") return confirmPending();
+      if (intent === "annuler") return cancelPending();
     }
 
-    // A''. Réponse à « poids de chaque unité ou poids total ? »
-    // Un simple « oui » ne répond pas à une question à deux choix : on la repose clairement.
-    if (awaitingWeight.current && intent !== "annuler" && intent !== "aide") {
-      const draft = draftRef.current;
-      const unit = draft.unite ?? "unité";
-      const merged = mergeDraft(draft, message, knownPlaces, "poidsMode");
-      if (merged.poidsMode || merged.poidsKg !== draft.poidsKg) {
-        return continueCollecting(merged, correctionNote(draft, merged));
+    // C. « Annuler la réservation » avec une réservation sélectionnée → annulation de celle-ci
+    if (intent === "annuler" && reservation && /reserv/.test(strip(message)) && !pendingRef.current) {
+      if (isCancelled(reservation.status)) {
+        return push("assistant", "Cette réservation est déjà annulée.");
       }
-      if (intent === "confirmer" || intent === "refuser") {
-        return push(
-          "assistant",
-          `« ${intent === "confirmer" ? "Oui" : "Non"} » ne me permet pas de choisir : il y a deux possibilités.\n• Chaque ${unit} pèse ${draft.poidsKg} kg\n• Les ${draft.quantite} ${pluralUnit(unit, draft.quantite ?? 2)} pèsent ${draft.poidsKg} kg au total\nLequel est correct ?`,
-          { choices: [`Chaque ${unit}`, "Poids total"] },
-        );
-      }
-      // autre information (date, port...) : fusionnée plus bas ; la question sera reposée
-    }
-
-    if (intent === "aide") return push("assistant", HELP);
-
-    // B. Confirmation du récapitulatif → création par le backend
-    if (awaitingConfirm.current && intent === "confirmer") {
-      return createFromDraft();
-    }
-
-    // C. Le client refuse le récapitulatif : correction directe, sans tout redemander
-    if (awaitingConfirm.current && intent === "refuser") {
-      const before = draftRef.current;
-      const merged = mergeDraft(before, message, knownPlaces, null);
-      const note = correctionNote(before, merged);
-      awaitingConfirm.current = false;
-      if (note) return continueCollecting(merged, note);
+      pendingCancel.current = reservation;
       return push(
         "assistant",
-        "Que souhaitez-vous modifier ? Indiquez la nouvelle information (date, trajet, quantité, poids...) ou dites « annuler ».",
-        { choices: ["Annuler"] },
+        `Voulez-vous annuler la réservation de ${reservation.clientName} (${reservation.departure} → ${reservation.destination}) ?\nLes paiements déjà effectués seront conservés.`,
+        { choices: ["Oui", "Non"] },
       );
     }
 
-    // D. Annulation
-    if (intent === "annuler") {
-      // Abandon avant la création : aucune réservation n'existe, rien à annuler côté système
-      if (collecting.current || hasDraft()) {
-        resetDraft();
-        return push("assistant", "Demande abandonnée : aucune réservation n’a été créée.");
-      }
-      // Annulation d'une réservation existante (celle sélectionnée)
-      if (reservation) {
-        if (isCancelled(reservation.status)) {
-          return push("assistant", "Cette réservation est déjà annulée.");
-        }
-        pendingCancel.current = reservation;
-        return push(
-          "assistant",
-          `Voulez-vous annuler la réservation de ${reservation.clientName} (${reservation.departure} → ${reservation.destination}) ?\nLes paiements déjà effectués seront conservés.`,
-          { choices: ["Oui", "Non"] },
-        );
-      }
-      return push("assistant", "Il n’y a aucune réservation en cours ni sélectionnée à annuler.");
-    }
-
-    // « oui » / « non » alors que rien n'est en attente de confirmation
-    if ((intent === "confirmer" || intent === "refuser") && !collecting.current && !hasDraft()) {
-      return push(
-        "assistant",
-        "Il n’y a rien à confirmer pour le moment. Que souhaitez-vous réserver ?",
-        { choices: GUIDED_CHOICES },
-      );
-    }
-
-    // E. Collecte : le client parle librement, on extrait tout ce qu'il donne
-    if (intent === "reserver") collecting.current = true;
-    if (collecting.current || (hasDraft() && intent !== "disponibilite")) {
-      collecting.current = true;
-
-      if (!requestKind.current) {
-        const s = strip(message);
-        if (/envoy|expedi|colis|marchandise|fret/.test(s)) requestKind.current = "marchandise";
-        else if (/billet|passager/.test(s)) requestKind.current = "passager";
-      }
-
-      const before = draftRef.current;
-      const merged = mergeDraft(before, message, knownPlaces, asked.current);
-
-      // Une date passée est refusée
-      if (merged.date && merged.date < iso(new Date())) {
-        delete merged.date;
-        draftRef.current = merged;
-        awaitingConfirm.current = false;
-        awaitingWeight.current = false;
-        asked.current = "date";
-        return push("assistant", `${summarize(merged)}\n\nLa date indiquée est déjà passée. Quelle est la date du voyage ?`);
-      }
-
-      // Date relative ambiguë (« vendredi » dit un vendredi) → confirmation
-      const info = parseDateInfo(wordsToDigits(message));
-      if (merged.date && merged.date !== before.date && info?.ambiguous) {
-        draftRef.current = merged;
-        pendingDate.current = true;
-        awaitingConfirm.current = false;
-        awaitingWeight.current = false;
-        return push(
-          "assistant",
-          `Aujourd’hui, c’est déjà ${DAYS[new Date().getDay()]}. Parlez-vous de ${formatDateLong(merged.date)} ?`,
-          { choices: ["Oui", "Non, aujourd’hui"] },
-        );
-      }
-
-      return continueCollecting(merged, correctionNote(before, merged));
-    }
-
-    // F. Questions ouvertes (disponibilité, explications) → service IA, avec contexte
-    const response = await askAssistant({
-      question: message,
-      context: JSON.stringify({ reservation, draft: draftRef.current }),
-    });
-    push("assistant", typeof response === "string" ? response : JSON.stringify(response, null, 2));
+    // D. Tout le reste : conversation avec l'agent (mémoire, outils, vérification SQL)
+    const out = await agentChat(message, convIdRef.current);
+    convIdRef.current = out.conversationId;
+    setPend(out.pending);
+    push("assistant", out.reply);
   };
 
   const submitMessage = async (message: string, byVoice: boolean) => {
@@ -614,14 +301,14 @@ export default function AssistantChat({
       await handle(message);
       if (byVoice) {
         await speak(lastReply.current);
-        // Échange encore ouvert (info manquante, confirmation attendue) → on réécoute
-        const open = collecting.current || hasDraft() || pendingCancel.current !== null;
+        // Échange encore ouvert (récapitulatif ou annulation en attente) → on réécoute
+        const open = pendingRef.current !== null || pendingCancel.current !== null;
         if (open && voiceMode.current) startListening();
         else voiceMode.current = false;
       }
-    } catch {
+    } catch (error) {
       voiceMode.current = false;
-      push("assistant", "Je n’ai pas pu traiter la demande. Vérifiez votre connexion ou relancez-la.");
+      push("assistant", getErrorMessage(error) || "Je n’ai pas pu traiter la demande. Vérifiez votre connexion.");
     } finally {
       setIsLoading(false);
     }
@@ -637,12 +324,18 @@ export default function AssistantChat({
     await submitMessage(question.trim(), false);
   };
 
-  // Les boutons de réponse rapide ne s'affichent que sous le tout dernier message
   const lastMessageId = messages.length ? messages[messages.length - 1].id : null;
+
+  const recapRows = (p: PendingView): Array<[string, string]> => [
+    ["Marchandise", `${p.quantite} ${p.unite ?? ""} ${p.marchandise}`.replace(/\s+/g, " ").trim()],
+    ["Poids total", `${p.poidsTotalKg} kg`],
+    ["Trajet", `${p.depart} → ${p.arrivee}`],
+    ["Date", p.date],
+    ...(p.bateau ? ([["Navire", p.bateau]] as Array<[string, string]>) : []),
+  ];
 
   return (
     <Card className="flex h-full flex-col overflow-hidden rounded-2xl border border-blue-100 bg-blue-50/40 shadow-sm">
-      {/* En-tête : avatar, titre, statut, badges */}
       <CardHeader className="border-b border-blue-100 bg-gradient-to-r from-blue-50 to-white px-5 py-4">
         <div className="flex items-center justify-between gap-4">
           <div className="flex items-center gap-4">
@@ -680,7 +373,6 @@ export default function AssistantChat({
       </CardHeader>
 
       <CardContent className="flex h-[560px] flex-col gap-3 p-0">
-        {/* Messages */}
         <div className="flex-1 space-y-5 overflow-y-auto px-5 pb-2 pt-5">
           {messages.map((m) => {
             const mine = m.role === "user";
@@ -741,26 +433,6 @@ export default function AssistantChat({
                     </span>
                   )}
 
-                  {m.recap && (
-                    <div className="w-full min-w-[280px] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-blue-100">
-                      <div className="bg-blue-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
-                        Récapitulatif
-                      </div>
-                      <dl className="divide-y text-sm">
-                        {m.recap.rows.map(([label, value]) => (
-                          <div key={label} className="flex justify-between gap-4 px-4 py-2">
-                            <dt className="text-slate-500">{label}</dt>
-                            <dd className="text-right font-medium">{value}</dd>
-                          </div>
-                        ))}
-                        <div className="flex justify-between gap-4 bg-slate-50 px-4 py-2.5">
-                          <dt className="font-medium">Prix total</dt>
-                          <dd className="text-right font-semibold text-blue-700">{m.recap.price}</dd>
-                        </div>
-                      </dl>
-                    </div>
-                  )}
-
                   {showChoices && (
                     <div className="flex flex-wrap gap-2">
                       {m.choices!.map((c) => (
@@ -780,6 +452,47 @@ export default function AssistantChat({
             );
           })}
 
+          {/* Récapitulatif préparé par l'agent : seul ce bouton enregistre la réservation */}
+          {pending && !isLoading && (
+            <div className="ml-[52px] w-full max-w-[78%] min-w-[280px] overflow-hidden rounded-2xl bg-white shadow-sm ring-1 ring-blue-100">
+              <div className="bg-blue-50 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-blue-700">
+                Récapitulatif
+              </div>
+              <dl className="divide-y text-sm">
+                {recapRows(pending).map(([label, value]) => (
+                  <div key={label} className="flex justify-between gap-4 px-4 py-2">
+                    <dt className="text-slate-500">{label}</dt>
+                    <dd className="text-right font-medium">{value}</dd>
+                  </div>
+                ))}
+                <div className="flex justify-between gap-4 bg-slate-50 px-4 py-2.5">
+                  <dt className="font-medium">Prix total</dt>
+                  <dd className="text-right font-semibold text-blue-700">
+                    {pending.prix != null ? formatCurrency(pending.prix) : "calculé par le système"}
+                  </dd>
+                </div>
+              </dl>
+              <div className="flex gap-2 p-3">
+                <Button
+                  type="button"
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                  disabled={isLoading}
+                  onClick={() => void submitMessage("Oui, confirmer", false)}
+                >
+                  Confirmer
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={isLoading}
+                  onClick={() => void submitMessage("Annuler", false)}
+                >
+                  Annuler
+                </Button>
+              </div>
+            </div>
+          )}
+
           {isLoading && (
             <div className="flex items-end gap-3">
               <span className="flex h-10 w-10 items-center justify-center rounded-full bg-blue-100 text-blue-700">
@@ -795,7 +508,6 @@ export default function AssistantChat({
           <div ref={bottomRef} />
         </div>
 
-        {/* Suggestions rapides */}
         <div className="px-5">
           <p className="mb-2 flex items-center gap-1.5 text-sm font-semibold text-slate-800">
             <Zap className="h-4 w-4 fill-blue-600 text-blue-600" />
@@ -817,7 +529,6 @@ export default function AssistantChat({
           </div>
         </div>
 
-        {/* Zone de saisie */}
         <form
           className="flex items-center gap-3 border-t border-blue-100 bg-white px-5 py-4"
           onSubmit={sendMessage}
