@@ -20,6 +20,7 @@ import { formatCurrency } from "../Tools/Tools";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
 import { detectIntent, strip } from "./reservationParser";
+import BotMessage from "./BotMessage"; // NOUVEAU
 
 // Les types restent importables depuis ce fichier, comme avant
 export type { ReservationDraft, ReservationQuote } from "./reservationParser";
@@ -68,11 +69,13 @@ interface ChatMessage {
   choices?: string[];
   success?: boolean;
   welcome?: boolean;
+  md?: boolean; // NOUVEAU : réponse de l'agent, affichée en Markdown stylisé
 }
 
 interface PushOptions {
   choices?: string[];
   success?: boolean;
+  md?: boolean; // NOUVEAU
 }
 
 const WELCOME_EXAMPLES = [
@@ -145,7 +148,10 @@ export default function AssistantChat({
     new Promise<void>((resolve) => {
       if (!("speechSynthesis" in window)) return resolve();
       window.speechSynthesis.cancel();
-      const u = new SpeechSynthesisUtterance(text.replace(/[✅•]/g, "").replace(/\n+/g, ". "));
+      // NOUVEAU : on retire aussi les symboles Markdown (*, _, #, -) pour la lecture vocale
+      const u = new SpeechSynthesisUtterance(
+        text.replace(/[✅•*_#]/g, "").replace(/^\s*-\s+/gm, "").replace(/\n+/g, ". "),
+      );
       u.lang = "fr-FR";
       u.onend = () => resolve();
       u.onerror = () => resolve();
@@ -289,7 +295,7 @@ export default function AssistantChat({
     const out = await agentChat(message, convIdRef.current);
     convIdRef.current = out.conversationId;
     setPend(out.pending);
-    push("assistant", out.reply);
+    push("assistant", out.reply, { md: true }); // NOUVEAU : affichage stylisé
   };
 
   const submitMessage = async (message: string, byVoice: boolean) => {
@@ -390,7 +396,9 @@ export default function AssistantChat({
 
                 <div className={`flex max-w-[78%] flex-col gap-2 ${mine ? "items-end" : "items-start"}`}>
                   <div
-                    className={`relative whitespace-pre-line rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                    className={`relative rounded-2xl px-4 py-3 text-sm leading-relaxed ${
+                      m.md ? "" : "whitespace-pre-line"
+                    } ${
                       mine
                         ? "rounded-br-md bg-blue-600 text-white shadow-md"
                         : m.success
@@ -403,7 +411,7 @@ export default function AssistantChat({
                         <CheckCircle2 className="h-4 w-4" /> Terminé
                       </span>
                     )}
-                    {m.content}
+                    {m.md ? <BotMessage text={m.content} /> : m.content}
 
                     {m.welcome && (
                       <div className="mt-2">

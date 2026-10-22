@@ -1,0 +1,33 @@
+.bm { font-size: 14.5px; line-height: 1.55; color: #1e293b; }
+.bm-p { margin: 0 0 8px; }
+.bm-p:last-child { margin-bottom: 0; }
+
+.bm-strong {
+  color: #1d4ed8;
+  font-weight: 700;
+  background: #dbeafe;
+  padding: 1px 7px;
+  border-radius: 6px;
+}
+
+.bm-list { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 8px; }
+.bm-item {
+  background: #fff;
+  border: 1px solid #dbeafe;
+  border-left: 4px solid #2563eb;
+  border-radius: 10px;
+  padding: 9px 12px;
+  box-shadow: 0 1px 3px rgba(37, 99, 235, 0.08);
+}
+
+.bm-badge {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 9px;
+  border-radius: 999px;
+  margin: 0 2px;
+}
+.bm-badge.ok   { background: #dcfce7; color: #15803d; }
+.bm-badge.warn { background: #fef3c7; color: #b45309; }
+.bm-badge.bad  { background: #fee2e2; color: #b91c1c; }
