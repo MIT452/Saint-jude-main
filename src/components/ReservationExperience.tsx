@@ -202,11 +202,20 @@ const exportCsv = (rows: ReservationRecord[]) => {
    Page principale
 ========================= */
 
+// Valeur du rôle administrateur (même valeur que dans le tableau de bord)
+const ADMIN_ROLE = "Propriétaire";
+const ALL_CLIENTS = "all";
+const REFRESH_EVERY_MS = 5000;
+
 export default function ReservationExperience() {
   const stJude = useSelector((state: RootState) => state.stJude);
+  const currentUser = useSelector((state: RootState) => state.users.currentUser);
+  const isAdmin = currentUser?.role === ADMIN_ROLE;
   const { trip, boat } = stJude;
   const [activeTab, setActiveTab] = useState<Tab>("classic");
-  const [reservations, setReservations] = useState<ReservationRecord[]>([]);
+  // allReservations = tout ce que le serveur renvoie (admin : tous les clients ; client : les siennes)
+  const [allReservations, setReservations] = useState<ReservationRecord[]>([]);
+  const [clientFilter, setClientFilter] = useState(ALL_CLIENTS);
   const [selectedReservation, setSelectedReservation] = useState<ReservationRecord | null>(null);
   const [status, setStatus] = useState("");
   const [voiceStatus, setVoiceStatus] = useState("");
@@ -214,6 +223,24 @@ export default function ReservationExperience() {
   const [channel, setChannel] = useState<NotificationChannel>("whatsapp");
   const [isLoading, setIsLoading] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
+
+  // Réservations affichées : l'admin peut se limiter à un client
+  const reservations = useMemo(
+    () =>
+      isAdmin && clientFilter !== ALL_CLIENTS
+        ? allReservations.filter((item) => item.userId === clientFilter)
+        : allReservations,
+    [allReservations, isAdmin, clientFilter]
+  );
+
+  // Liste des clients (admin) construite à partir des réservations reçues
+  const clients = useMemo(() => {
+    const byId = new Map<string, string>();
+    allReservations.forEach((item) => {
+      if (item.userId) byId.set(item.userId, item.clientName || "Client");
+    });
+    return Array.from(byId.entries()).sort((a, b) => a[1].localeCompare(b[1]));
+  }, [allReservations]);
 
   // Ports connus (noms des trajets) : l'assistant les reconnaît plus sûrement
   const knownPlaces = useMemo(
@@ -276,12 +303,26 @@ export default function ReservationExperience() {
     void refreshReservations();
   }, []);
 
+  // Sur l'onglet Assistant IA, le tableau se met à jour tout seul :
+  // la réservation créée par le « oui » du chat apparaît sans cliquer sur Actualiser
+  useEffect(() => {
+    if (activeTab !== "assistant") return;
+    const timer = setInterval(async () => {
+      try {
+        setReservations(await getReservations());
+      } catch {
+        // on réessaie au prochain passage
+      }
+    }, REFRESH_EVERY_MS);
+    return () => clearInterval(timer);
+  }, [activeTab]);
+
   // Garde la réservation sélectionnée à jour après chaque actualisation
   useEffect(() => {
     setSelectedReservation((current) =>
-      current ? reservations.find((item) => item.id === current.id) ?? current : current
+      current ? allReservations.find((item) => item.id === current.id) ?? current : current
     );
-  }, [reservations]);
+  }, [allReservations]);
 
   const handleAdd = async (reservation: ReservationRecord) => {
     setErrorStatus("");
@@ -304,12 +345,12 @@ export default function ReservationExperience() {
   };
 
   const handleConfirm = async () => {
-    if (!selectedReservation || isConfirming) return;
+    if (!selectedReservation || isConfirming || !isAdmin) return;
     setErrorStatus("");
     setVoiceStatus("");
     setIsConfirming(true);
 
-    // 1) Étape principale : changer le statut (appel back inchangé)
+    // 1) Étape principale : changer le statut (route serveur réservée à l'admin)
     let finalized: ReservationRecord;
     try {
       finalized = await updateReservationStatus(selectedReservation.id, "Confirmée");
@@ -413,9 +454,29 @@ export default function ReservationExperience() {
             </p>
           </div>
         </div>
-        <Button variant="outline" onClick={refreshReservations} disabled={isLoading}>
-          <RefreshCcw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> Actualiser
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && (
+            <Select value={clientFilter} onValueChange={setClientFilter}>
+              <SelectTrigger className="w-52 bg-white">
+                <span className="flex items-center gap-2">
+                  <User className="h-4 w-4 text-primary" />
+                  <SelectValue placeholder="Client" />
+                </span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL_CLIENTS}>Tous les clients</SelectItem>
+                {clients.map(([id, name]) => (
+                  <SelectItem key={id} value={id}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          <Button variant="outline" onClick={refreshReservations} disabled={isLoading}>
+            <RefreshCcw className={`mr-2 h-4 w-4 ${isLoading ? "animate-spin" : ""}`} /> Actualiser
+          </Button>
+        </div>
       </div>
 
       {/* ===== Onglets ===== */}
@@ -520,6 +581,7 @@ export default function ReservationExperience() {
                             className="w-full"
                             onClick={handleConfirm}
                             disabled={
+                              !isAdmin ||
                               isConfirming ||
                               estConfirmee(selectedReservation.status) ||
                               estAnnulee(selectedReservation.status)
@@ -528,6 +590,11 @@ export default function ReservationExperience() {
                             <CheckCircle2 className="mr-2 h-4 w-4" />
                             {isConfirming ? "Confirmation en cours..." : "Confirmer réservation"}
                           </Button>
+                          {!isAdmin && (
+                            <p className="text-xs text-muted-foreground">
+                              Seul l’administrateur peut confirmer une réservation.
+                            </p>
+                          )}
                           <Button
                             variant="ghost"
                             className="w-full"
