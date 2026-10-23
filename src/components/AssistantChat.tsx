@@ -20,7 +20,7 @@ import { formatCurrency } from "../Tools/Tools";
 import { Button } from "./ui/button";
 import { Card, CardContent, CardHeader } from "./ui/card";
 import { detectIntent, strip } from "./reservationParser";
-import BotMessage from "./BotMessage"; // NOUVEAU
+import BotMessage from "./BotMessage";
 
 // Les types restent importables depuis ce fichier, comme avant
 export type { ReservationDraft, ReservationQuote } from "./reservationParser";
@@ -69,13 +69,13 @@ interface ChatMessage {
   choices?: string[];
   success?: boolean;
   welcome?: boolean;
-  md?: boolean; // NOUVEAU : réponse de l'agent, affichée en Markdown stylisé
+  md?: boolean; // réponse de l'agent, affichée en Markdown stylisé
 }
 
 interface PushOptions {
   choices?: string[];
   success?: boolean;
-  md?: boolean; // NOUVEAU
+  md?: boolean;
 }
 
 const WELCOME_EXAMPLES = [
@@ -148,7 +148,7 @@ export default function AssistantChat({
     new Promise<void>((resolve) => {
       if (!("speechSynthesis" in window)) return resolve();
       window.speechSynthesis.cancel();
-      // NOUVEAU : on retire aussi les symboles Markdown (*, _, #, -) pour la lecture vocale
+      // On retire aussi les symboles Markdown (*, _, #, -) pour la lecture vocale
       const u = new SpeechSynthesisUtterance(
         text.replace(/[✅•*_#]/g, "").replace(/^\s*-\s+/gm, "").replace(/\n+/g, ". "),
       );
@@ -205,19 +205,32 @@ export default function AssistantChat({
   /* ---------- Actions humaines : Confirmer / Annuler le récapitulatif ---------- */
   const confirmPending = async () => {
     const id = convIdRef.current;
-    if (!id) return push("assistant", "Il n’y a rien à confirmer pour le moment.");
+    if (!id) {
+      push("assistant", "Il n’y a rien à confirmer pour le moment.");
+      return;
+    }
+
+    let out: Awaited<ReturnType<typeof agentConfirm>>;
     try {
-      const out = await agentConfirm(id);
-      setPend(null);
-      push("assistant", out.reply, { success: true });
-      // le backend renvoie un résumé de la réservation créée
-      onReservationCreated?.(out.reservation as unknown as ReservationRecord);
+      out = await agentConfirm(id);
     } catch (error) {
       push(
         "assistant",
         `La réservation n’a pas été enregistrée : ${getErrorMessage(error)}`,
         pendingRef.current ? { choices: ["Oui, confirmer", "Annuler"] } : {},
       );
+      return;
+    }
+
+    // La réservation est enregistrée : on met l'interface à jour AVANT d'appeler le parent
+    setPend(null);
+    push("assistant", out.reply, { success: true });
+
+    // Un échec du composant parent ne doit pas faire croire que la réservation a échoué
+    try {
+      onReservationCreated?.(out.reservation as unknown as ReservationRecord);
+    } catch (error) {
+      console.error("onReservationCreated a échoué", error);
     }
   };
 
@@ -226,6 +239,20 @@ export default function AssistantChat({
     setPend(null);
     if (id) await agentCancel(id).catch(() => undefined); // le brouillon expire de toute façon après 30 min
     push("assistant", "D’accord, rien n’est enregistré.");
+  };
+
+  /** Lance une action de bouton directement, sans passer par la détection de texte. */
+  const runAction = async (label: string, action: () => Promise<void>) => {
+    if (isLoading) return;
+    push("user", label);
+    setIsLoading(true);
+    try {
+      await action();
+    } catch (error) {
+      push("assistant", getErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   /* ---------- Annulation d'une réservation EXISTANTE (statut Annulée, paiements conservés) ---------- */
@@ -257,7 +284,10 @@ export default function AssistantChat({
 
   /* ---------- Traitement d'un message ---------- */
   const handle = async (message: string) => {
-    const intent = detectIntent(message);
+    // CORRECTION : on indique à detectIntent qu'une confirmation est attendue
+    // (récapitulatif affiché ou annulation en attente), sinon « oui » est ignoré.
+    const expectingConfirm = pendingRef.current !== null || pendingCancel.current !== null;
+    const intent = detectIntent(message, expectingConfirm);
 
     // A. Réponse à « Voulez-vous annuler cette réservation existante ? »
     if (pendingCancel.current) {
@@ -295,7 +325,7 @@ export default function AssistantChat({
     const out = await agentChat(message, convIdRef.current);
     convIdRef.current = out.conversationId;
     setPend(out.pending);
-    push("assistant", out.reply, { md: true }); // NOUVEAU : affichage stylisé
+    push("assistant", out.reply, { md: true });
   };
 
   const submitMessage = async (message: string, byVoice: boolean) => {
@@ -481,11 +511,12 @@ export default function AssistantChat({
                 </div>
               </dl>
               <div className="flex gap-2 p-3">
+                {/* CORRECTION : appel direct des actions, sans passer par la détection de texte */}
                 <Button
                   type="button"
                   className="bg-emerald-600 hover:bg-emerald-700"
                   disabled={isLoading}
-                  onClick={() => void submitMessage("Oui, confirmer", false)}
+                  onClick={() => void runAction("Confirmer", confirmPending)}
                 >
                   Confirmer
                 </Button>
@@ -493,7 +524,7 @@ export default function AssistantChat({
                   type="button"
                   variant="outline"
                   disabled={isLoading}
-                  onClick={() => void submitMessage("Annuler", false)}
+                  onClick={() => void runAction("Annuler", cancelPending)}
                 >
                   Annuler
                 </Button>
