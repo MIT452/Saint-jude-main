@@ -1,5 +1,5 @@
 // src/components/Profile.tsx
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "../redux";
@@ -14,6 +14,43 @@ const pad = (n: number) => String(n).padStart(2, "0");
 const pick = (u: any, ...keys: string[]) => { for (const k of keys) if (u?.[k] !== undefined && u[k] !== null && u[k] !== "") return u[k]; return undefined; };
 
 const isStrong = (p: string) => p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /\d/.test(p) && /[^A-Za-z0-9]/.test(p);
+
+/* ---------- Photo de profil : conservée dans le navigateur (une photo par utilisateur) ---------- */
+const photoKey = (id: unknown) => `profilePhoto:${String(id ?? "")}`;
+
+const readStoredPhoto = (id: unknown): string | undefined => {
+  try {
+    return localStorage.getItem(photoKey(id)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Recadre en carré et réduit l'image (256 px, JPEG) pour qu'elle reste légère
+const resizeImage = (file: File, max = 256): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("lecture"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("image"));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const size = Math.min(max, side);
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("canvas"));
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 
 // Champ lecture seule avec icône (informations personnelles)
 const ReadField = ({ label, value, icon, chevron, dot }: { label: string; value: string; icon?: ReactNode; chevron?: boolean; dot?: boolean }) => (
@@ -53,8 +90,18 @@ const Profile = () => {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [busy, setBusy] = useState(false);
-  const [photo, setPhoto] = useState<string | undefined>(pick(currentUser, "photo", "image", "avatar", "picture"));
+  const [photo, setPhoto] = useState<string | undefined>(
+    readStoredPhoto(currentUser?.id) ?? pick(currentUser, "photo", "image", "avatar", "picture"),
+  );
   const fileRef = useRef<HTMLInputElement>(null);
+
+  // Après un rafraîchissement, l'utilisateur peut arriver un peu après le premier affichage :
+  // on recharge alors sa photo enregistrée.
+  useEffect(() => {
+    if (!currentUser) return;
+    const saved = readStoredPhoto(currentUser.id) ?? pick(currentUser, "photo", "image", "avatar", "picture");
+    if (saved) setPhoto(saved);
+  }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleChangePassword = async () => {
     if (!currentUser) return;
@@ -100,9 +147,26 @@ const Profile = () => {
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const canSubmit = !!oldPassword.trim() && isStrong(newPassword) && newPassword === confirmPassword && !busy;
 
-  const onPhoto = (e: ChangeEvent<HTMLInputElement>) => {
+  const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    if (f) setPhoto(URL.createObjectURL(f)); // aperçu local uniquement (non enregistré)
+    e.target.value = ""; // permet de rechoisir le même fichier
+    if (!f) return;
+    if (!f.type.startsWith("image/")) {
+      toast("Veuillez choisir une image.");
+      return;
+    }
+    if (f.size > 8 * 1024 * 1024) {
+      toast("Image trop lourde (8 Mo maximum).");
+      return;
+    }
+    try {
+      const data = await resizeImage(f);
+      localStorage.setItem(photoKey(currentUser.id), data);
+      setPhoto(data);
+      toast("Photo enregistrée sur cet appareil.");
+    } catch {
+      toast("Impossible d'enregistrer cette photo.");
+    }
   };
 
   const Avatar = ({ size }: { size: string }) =>
@@ -120,7 +184,9 @@ const Profile = () => {
         <div className="ml-auto flex items-center gap-5">
           <Bell size={22} className="text-[#1255d6]" />
           <div className="flex items-center gap-2 bg-[#eef3fb] rounded-full pl-1.5 pr-3 py-1">
-            <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={20} /></div>
+            {photo
+              ? <img src={photo} alt="" className="w-9 h-9 rounded-full object-cover" />
+              : <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={20} /></div>}
             <span className="text-sm">{currentUser.role === "Propriétaire" ? "Administrateur" : currentUser.name}</span>
             <ChevronDown size={14} />
           </div>
@@ -157,7 +223,7 @@ const Profile = () => {
               <div className="flex flex-col items-center gap-2 pt-3">
                 <div className="relative">
                   <Avatar size="w-[120px] h-[120px]" />
-                  <button onClick={() => fileRef.current?.click()} title="Changer la photo (aperçu local)" className="absolute bottom-1 right-1 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white"><Camera size={16} /></button>
+                  <button onClick={() => fileRef.current?.click()} title="Changer la photo" className="absolute bottom-1 right-1 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white"><Camera size={16} /></button>
                   <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} className="hidden" />
                 </div>
                 <button onClick={() => fileRef.current?.click()} className="text-xs text-[#1255d6]">Changer la photo</button>
