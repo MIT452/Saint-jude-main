@@ -15,6 +15,7 @@ export interface RegistrationInput extends AuthCredentials {
   name: string;
   lastName: string;
   tel: string;
+  role: string;
 }
 
 export const loginUser = async (credentials: AuthCredentials): Promise<User> => {
