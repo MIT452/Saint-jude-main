@@ -5,11 +5,24 @@ import { AppDispatch } from "../redux";
 import { setCurrentUser } from "../redux/feature/users";
 import {
   Anchor, ArrowRight, Bell, Bot, CalendarDays, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
-  Ship, ShieldCheck, User, UserPlus, Users,
+  Ship, ShieldCheck, User, UserPlus,
 } from "lucide-react";
-import { loginUser, registerUser, PUBLIC_ROLES, ROLE_LABELS } from "../data/service";
-import type { Role } from "../data/service";
+import { loginUser, registerUser } from "../data/service";
 
+/* =====================================================================
+   PHOTOS DES PAGES CONNEXION / INSCRIPTION
+   ---------------------------------------------------------------------
+   Placez vos photos dans le dossier :  public/images/
+   Puis, si besoin, changez uniquement les noms de fichiers ci-dessous
+   (par exemple "login-bg.png" si votre photo est un PNG).
+
+     LOGIN_PHOTO     -> fond de la page de CONNEXION (mer, bateau, montagne)
+     REGISTER_PHOTO  -> bandeau du haut de la page d'INSCRIPTION (bateau sur la mer)
+     AINA_PHOTO      -> portrait de l'assistante « Aina » (page d'INSCRIPTION, à droite)
+
+   Les photos doivent être SANS texte (le logo et les slogans sont dans le code).
+   Si un fichier est absent, un dégradé bleu maritime s'affiche à la place.
+===================================================================== */
 const LOGIN_PHOTO = "login-bg.jpg";
 const REGISTER_PHOTO = "register-banner.jpg";
 const AINA_PHOTO = "aina.jpg";
@@ -22,9 +35,6 @@ const LOGIN_BG = `${photoUrl(LOGIN_PHOTO)}, ${SEA}`;
 const BANNER_BG = `${photoUrl(REGISTER_PHOTO)}, ${SEA}`;
 const AINA_BG = `${photoUrl(AINA_PHOTO)}, linear-gradient(160deg,#6fb4f2 0%,#2f86dd 100%)`;
 
-// Rôles proposés à l'inscription (les rôles à privilèges élevés sont exclus)
-const ROLE_OPTIONS = PUBLIC_ROLES.map((value) => ({ value, label: ROLE_LABELS[value] }));
-
 const RULES: Array<[string, (p: string) => boolean]> = [
   ["Au moins 8 caractères", (p) => p.length >= 8],
   ["Une lettre majuscule", (p) => /[A-Z]/.test(p)],
@@ -36,8 +46,11 @@ const isStrong = (p: string) => RULES.every(([, ok]) => ok(p));
 
 const script = { fontFamily: "'Brush Script MT','Segoe Script',cursive" } as const;
 
+/* ---------- Photo de profil choisie dans l'explorateur de fichiers ----------
+   Même clé que la page Profil : la photo choisie ici s'y retrouve ensuite. */
 const photoKey = (id: unknown) => `profilePhoto:${String(id ?? "")}`;
 
+// Recadre en carré et réduit l'image (256 px, JPEG) pour qu'elle reste légère
 const resizeImage = (file: File, max = 256): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -63,6 +76,7 @@ const resizeImage = (file: File, max = 256): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
+/* ---------- Petits composants (hors de AuthPage pour ne pas perdre le focus à chaque frappe) ---------- */
 const Logo = () => (
   <div className="flex items-center gap-3 text-white">
     <div className="relative">
@@ -164,6 +178,7 @@ const BENEFITS: Array<[ReactNode, string, string]> = [
   [<ShieldCheck size={26} key="e" />, "Sécurité renforcée", "Votre compte est protégé et vos données restent privées."],
 ];
 
+/* ====================================================================== */
 const AuthPage = () => {
   const dispatch = useDispatch<AppDispatch>();
   const [isRegistering, setIsRegistering] = useState(false);
@@ -173,7 +188,6 @@ const AuthPage = () => {
   const [login, setLogin] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<Role>("gestionnaire");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -184,7 +198,7 @@ const AuthPage = () => {
 
   const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
-    e.target.value = "";
+    e.target.value = ""; // permet de rechoisir le même fichier
     if (!f) return;
     setPhotoError("");
     if (!f.type.startsWith("image/")) {
@@ -215,31 +229,20 @@ const AuthPage = () => {
         setError("Le mot de passe ne respecte pas les règles de sécurité.");
         return;
       }
-      if (!role || !PUBLIC_ROLES.includes(role)) {
-        setError("Veuillez sélectionner un rôle valide.");
-        return;
-      }
     }
 
     setIsSubmitting(true);
     try {
       const user = isRegistering
-        ? await registerUser({
-            name,
-            lastName,
-            email: login,
-            tel,
-            password,
-            role,
-          })
+        ? await registerUser({ name, lastName, email: login, tel, password })
         : await loginUser({ email: login, password });
-
+      // La photo choisie est conservée pour ce compte (retrouvée ensuite dans « Mon profil »)
       if (isRegistering && photo) {
         try {
           const newId = (user as { id?: unknown } | null)?.id;
           if (newId !== undefined && newId !== null) localStorage.setItem(photoKey(newId), photo);
         } catch {
-          /* stockage plein ou indisponible */
+          /* stockage plein ou indisponible : l'inscription continue sans photo */
         }
       }
       dispatch(setCurrentUser(user));
@@ -268,20 +271,17 @@ const AuthPage = () => {
   if (isRegistering) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#eaf4ff] to-[#d9eafc] flex flex-col">
-        <div
-          className="relative h-[230px] md:h-[260px] overflow-hidden"
-          style={{ backgroundImage: BANNER_BG, backgroundSize: "cover", backgroundPosition: "center" }}
-        >
+        {/* Bandeau du haut (photo : REGISTER_PHOTO) */}
+        <div className="relative h-[230px] md:h-[260px] overflow-hidden" style={{ backgroundImage: BANNER_BG, backgroundSize: "cover", backgroundPosition: "center" }}>
           <div className="absolute inset-0 bg-gradient-to-b from-[#0d4aa8]/40 to-transparent" />
           <div className="relative max-w-6xl mx-auto px-6 pt-8 flex items-start justify-between gap-4">
             <Logo />
-            <div className="hidden md:block pt-2">
-              <Tagline />
-            </div>
+            <div className="hidden md:block pt-2"><Tagline /></div>
           </div>
         </div>
 
         <div className="relative max-w-6xl w-full mx-auto px-4 md:px-6 -mt-16 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-6 pb-10 flex-1">
+          {/* Formulaire */}
           <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl border border-[#dbe5f5] p-6 md:p-8 space-y-5">
             <div className="text-center">
               <div className="mx-auto w-16 h-16 rounded-full bg-[#1255d6] text-white flex items-center justify-center shadow-md -mt-14 md:-mt-16 mb-3 ring-4 ring-white">
@@ -291,6 +291,7 @@ const AuthPage = () => {
               <p className="text-[#3e5788] mt-2">Rejoignez SAINT-JUDE et accédez à vos réservations en toute sécurité.</p>
             </div>
 
+            {/* Photo de profil (facultative) : choisie depuis l'explorateur de fichiers */}
             <div className="flex flex-col items-center gap-2">
               <div className="relative">
                 {photo ? (
@@ -300,12 +301,8 @@ const AuthPage = () => {
                     <User size={40} />
                   </span>
                 )}
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  title="Choisir une photo"
-                  className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white"
-                >
+                <button type="button" onClick={() => fileRef.current?.click()} title="Choisir une photo"
+                  className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white">
                   <Camera size={16} />
                 </button>
                 <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} className="hidden" />
@@ -320,60 +317,10 @@ const AuthPage = () => {
               <Field id="name" label="Prénom" icon={<User size={17} />} value={name} onChange={setName} placeholder="Votre prénom" autoComplete="given-name" />
               <Field id="lastName" label="Nom" icon={<User size={17} />} value={lastName} onChange={setLastName} placeholder="Votre nom" autoComplete="family-name" />
             </div>
-
             <Field id="email" label="Adresse e-mail" icon={<Mail size={17} />} type="email" value={login} onChange={setLogin} placeholder="exemple@domaine.com" autoComplete="email" />
             <Field id="tel" label="Téléphone" icon={<Phone size={17} />} type="tel" value={tel} onChange={setTel} placeholder="+261 34 12 34 567" autoComplete="tel" />
-
-            {/* ---------- Sélecteur de rôle ---------- */}
-            <div>
-              <label htmlFor="role" className="flex items-center gap-2 text-sm font-semibold text-[#10285e]">
-                <Users size={16} className="text-[#1255d6]" />
-                Rôle / Accès
-              </label>
-              <div className="mt-1.5 flex items-center gap-3 h-12 rounded-xl border border-[#cfdcf3] bg-white px-3 focus-within:border-[#1255d6] focus-within:ring-2 focus-within:ring-[#1255d6]/20">
-                <ShieldCheck size={17} className="text-[#1255d6]" />
-                <select
-                  id="role"
-                  value={role}
-                  onChange={(e) => setRole(e.target.value as Role)}
-                  required
-                  className="flex-1 bg-transparent outline-none text-sm text-[#10285e] cursor-pointer"
-                >
-                  <option value="" disabled>
-                    Sélectionnez un rôle…
-                  </option>
-                  {ROLE_OPTIONS.map((r) => (
-                    <option key={r.value} value={r.value}>
-                      {r.label}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <p className="mt-1 text-xs text-[#3e5788]">
-                Ce rôle détermine les droits d’accès dans la plateforme.
-              </p>
-            </div>
-
-            <PwdField
-              id="password"
-              label="Mot de passe"
-              value={password}
-              onChange={setPassword}
-              placeholder="Votre mot de passe"
-              autoComplete="new-password"
-              show={showPassword}
-              onToggle={() => setShowPassword((s) => !s)}
-            />
-            <PwdField
-              id="confirmPassword"
-              label="Confirmer le mot de passe"
-              value={confirmPassword}
-              onChange={setConfirmPassword}
-              placeholder="Confirmez votre mot de passe"
-              autoComplete="new-password"
-              show={showPassword}
-              onToggle={() => setShowPassword((s) => !s)}
-            />
+            <PwdField id="password" label="Mot de passe" value={password} onChange={setPassword} placeholder="Votre mot de passe" autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
+            <PwdField id="confirmPassword" label="Confirmer le mot de passe" value={confirmPassword} onChange={setConfirmPassword} placeholder="Confirmez votre mot de passe" autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
 
             <div className="flex gap-4 rounded-xl bg-[#eaf3ff] border border-[#c7defa] p-4">
               <ShieldCheck size={34} className="text-[#1255d6] shrink-0" />
@@ -391,46 +338,27 @@ const AuthPage = () => {
 
             {messages}
 
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="w-full h-12 rounded-xl bg-[#1255d6] hover:bg-[#0e45b3] text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
-            >
+            <button type="submit" disabled={isSubmitting}
+              className="w-full h-12 rounded-xl bg-[#1255d6] hover:bg-[#0e45b3] text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
               <UserPlus size={18} /> {isSubmitting ? "Veuillez patienter…" : "Créer mon compte"} {!isSubmitting && <ArrowRight size={18} />}
             </button>
 
             <div className="flex items-center gap-3 text-sm text-[#3e5788]">
               <span className="flex-1 h-px bg-[#dbe5f5]" />
-              <span>
-                Déjà inscrit ?{" "}
-                <button type="button" onClick={switchMode} className="font-bold text-[#1255d6] hover:underline">
-                  Se connecter
-                </button>
-              </span>
+              <span>Déjà inscrit ? <button type="button" onClick={switchMode} className="font-bold text-[#1255d6] hover:underline">Se connecter</button></span>
               <span className="flex-1 h-px bg-[#dbe5f5]" />
             </div>
 
             <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-xs text-[#3e5788]">
-              <span className="flex items-center gap-2">
-                <span className="w-8 h-8 rounded-full bg-[#eaf3ff] text-[#1255d6] flex items-center justify-center">
-                  <Lock size={15} />
-                </span>{" "}
-                Vos données sont protégées
-              </span>
-              <span className="flex items-center gap-2">
-                <span className="w-8 h-8 rounded-full bg-[#eaf3ff] text-[#1255d6] flex items-center justify-center">
-                  <ShieldCheck size={15} />
-                </span>{" "}
-                Connexion sécurisée
-              </span>
+              <span className="flex items-center gap-2"><span className="w-8 h-8 rounded-full bg-[#eaf3ff] text-[#1255d6] flex items-center justify-center"><Lock size={15} /></span> Vos données sont protégées</span>
+              <span className="flex items-center gap-2"><span className="w-8 h-8 rounded-full bg-[#eaf3ff] text-[#1255d6] flex items-center justify-center"><ShieldCheck size={15} /></span> Connexion sécurisée</span>
             </div>
           </form>
 
+          {/* Colonne droite */}
           <div className="space-y-4">
-            <div
-              className="relative h-[260px] rounded-2xl overflow-hidden shadow-lg"
-              style={{ backgroundImage: AINA_BG, backgroundSize: "cover", backgroundPosition: "center top" }}
-            >
+            {/* Portrait d'Aina (photo : AINA_PHOTO) */}
+            <div className="relative h-[260px] rounded-2xl overflow-hidden shadow-lg" style={{ backgroundImage: AINA_BG, backgroundSize: "cover", backgroundPosition: "center top" }}>
               <div className="absolute right-4 top-6 max-w-[55%] text-white text-xl -rotate-6 drop-shadow-md" style={script}>
                 Je suis Aina, votre assistant IA. Je suis là pour vous aider !
               </div>
@@ -456,6 +384,7 @@ const AuthPage = () => {
           </div>
         </div>
 
+        {/* Pied de page */}
         <div className="bg-gradient-to-r from-[#0d4aa8] to-[#1255d6] text-white text-sm py-4 text-center">
           <Ship size={22} className="inline-block mr-2 -mt-1" />
           SAINT-JUDE <span className="mx-2">—</span> Transport Maritime Antalaha ↔ Toamasina
@@ -467,12 +396,8 @@ const AuthPage = () => {
   /* ============================ CONNEXION ============================ */
   return (
     <div className="relative min-h-screen overflow-hidden" style={{ backgroundImage: LOGIN_BG, backgroundSize: "cover", backgroundPosition: "center" }}>
-      <div className="absolute top-8 left-8 md:left-14">
-        <Logo />
-      </div>
-      <div className="hidden lg:block absolute top-44 left-24">
-        <Tagline />
-      </div>
+      <div className="absolute top-8 left-8 md:left-14"><Logo /></div>
+      <div className="hidden lg:block absolute top-44 left-24"><Tagline /></div>
       <Anchor size={72} className="hidden md:block absolute top-8 right-10 text-white/35 rotate-12" />
       <div className="hidden md:flex absolute bottom-8 left-8 md:left-14 items-start gap-2 text-white">
         <MapPin size={22} className="mt-0.5" />
@@ -494,23 +419,10 @@ const AuthPage = () => {
 
           <Field id="email" label="Adresse e-mail" icon={<Mail size={17} />} labelIcon type="email" value={login} onChange={setLogin} placeholder="Entrez votre adresse e-mail" autoComplete="email" />
           <div>
-            <PwdField
-              id="password"
-              label="Mot de passe"
-              labelIcon
-              value={password}
-              onChange={setPassword}
-              placeholder="Entrez votre mot de passe"
-              autoComplete="current-password"
-              show={showPassword}
-              onToggle={() => setShowPassword((s) => !s)}
-            />
+            <PwdField id="password" label="Mot de passe" labelIcon value={password} onChange={setPassword} placeholder="Entrez votre mot de passe" autoComplete="current-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
             <div className="text-right mt-2">
-              <button
-                type="button"
-                className="text-sm text-[#1255d6] hover:underline"
-                onClick={() => setInfo("Pour réinitialiser votre mot de passe, contactez l'administrateur de SAINT-JUDE.")}
-              >
+              <button type="button" className="text-sm text-[#1255d6] hover:underline"
+                onClick={() => setInfo("Pour réinitialiser votre mot de passe, contactez l'administrateur de SAINT-JUDE.")}>
                 Mot de passe oublié ?
               </button>
             </div>
@@ -518,19 +430,13 @@ const AuthPage = () => {
 
           {messages}
 
-          <button
-            type="submit"
-            disabled={isSubmitting}
-            className="w-full h-12 rounded-xl bg-[#1255d6] hover:bg-[#0e45b3] text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-60"
-          >
+          <button type="submit" disabled={isSubmitting}
+            className="w-full h-12 rounded-xl bg-[#1255d6] hover:bg-[#0e45b3] text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
             <LogIn size={18} /> {isSubmitting ? "Veuillez patienter…" : "Se connecter"}
           </button>
 
           <p className="text-center text-sm text-[#3e5788]">
-            Pas encore de compte ?{" "}
-            <button type="button" onClick={switchMode} className="font-bold text-[#1255d6] hover:underline">
-              Créer un compte
-            </button>
+            Pas encore de compte ? <button type="button" onClick={switchMode} className="font-bold text-[#1255d6] hover:underline">Créer un compte</button>
           </p>
 
           <div className="border-t border-[#dbe5f5] pt-4 flex items-center justify-center gap-3 text-[#3e5788]">
