@@ -1,228 +1,438 @@
-import { FC, useRef, useState } from "react";
-import type { DragEvent, ChangeEvent, FormEvent, ReactNode } from "react";
-import { useDispatch, useSelector } from "react-redux";
-import { toast } from "react-toastify";
+import { FC, useMemo, useState } from "react";
+import { Button } from "./ui/button";
 import {
-  Search, Bell, ChevronDown, Calendar, UserCircle2, Ship, ClipboardList, Weight, ArrowLeft, Image as ImageIcon, Settings, User,
-  FileText, UploadCloud, X, RotateCcw, Save,
+  Hammer, Plus, Ship, Search, Filter, Eye, Wrench, CheckCircle2, Gauge,
+  ChevronLeft, ChevronRight, ArrowRight, ListChecks, Cog, AlertTriangle,
 } from "lucide-react";
+import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
+import { Input } from "./ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
+import { useSelector } from "react-redux";
 import { RootState } from "../redux";
-import { Boat, TABLE_DATA_BASE } from "../data/type";
-import { setBoat as setBoats } from "../redux/feature/stJude";
-import { onAddService } from "../data/service";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
+import BoatForm from "./BoatForm";
+import BoatModal from "./BoatModal";
+import AiFinanceChat from "./AiFinanceChat";
+import { Boat } from "../data/type";
 
-const pad = (n: number) => String(n).padStart(2, "0");
-const STATES = ["En construction", "En service", "En maintenance", "En panne", "Désarmé", "Hors service"];
-const dotColor = (s: string) => (s === "En service" ? "bg-[#1fae6a]" : s === "En maintenance" || s === "En construction" ? "bg-[#f59e0b]" : s === "" ? "bg-gray-300" : "bg-[#e5342f]");
-const MAX_MB = 5;
+const PAGE_SIZE = 5;
 
-const Label = ({ icon, text, required }: { icon: ReactNode; text: string; required?: boolean }) => (
-  <label className="flex items-center gap-3 text-[15px] font-semibold text-[#0b3aa8] mb-2">
-    <span className="text-[#1255d6]">{icon}</span>
-    <span>{text}{required && <span className="text-red-500"> *</span>}</span>
-  </label>
-);
+const norm = (s: string) =>
+  s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase().trim();
+const nf = (n: number) => n.toLocaleString("fr-FR");
 
-interface BoatFormProps {
-  onClose?: () => void;
+// Couleur et badge selon l'état du bateau
+function stateMeta(state: string) {
+  const s = norm(state);
+  // "Hors service" et "En panne" avant "service" (sinon "Hors service" passait en vert)
+  if (s.includes("hors") || s.includes("panne"))
+    return { color: "#dc2626", badge: "bg-red-100 text-red-700", Icon: AlertTriangle };
+  if (s.includes("service")) return { color: "#16a34a", badge: "bg-green-100 text-green-700", Icon: Cog };
+  if (s.includes("maintenance")) return { color: "#f59e0b", badge: "bg-amber-100 text-amber-700", Icon: Wrench };
+  if (s.includes("construction")) return { color: "#f97316", badge: "bg-orange-100 text-orange-700", Icon: Hammer };
+  if (s.includes("dispon")) return { color: "#2563eb", badge: "bg-blue-100 text-blue-700", Icon: CheckCircle2 };
+  return { color: "#94a3b8", badge: "bg-gray-100 text-gray-700", Icon: Ship };
 }
 
-const BoatForm: FC<BoatFormProps> = ({ onClose }) => {
-  const dispatch = useDispatch();
-  const { allUser, currentUser } = useSelector((state: RootState) => state.users);
-  const capitaines = allUser.filter(({ role }) => role === "Capitaine");
+const StateBadge: FC<{ state: string }> = ({ state }) => {
+  const { badge, Icon } = stateMeta(state);
+  return (
+    <span className={`inline-flex items-center gap-1 whitespace-nowrap rounded-full px-3 py-1 text-xs font-medium ${badge}`}>
+      <Icon className="h-3.5 w-3.5" /> {state}
+    </span>
+  );
+};
 
-  const [id, setId] = useState("");
-  const [name, setName] = useState("");
-  const [capacity, setCapacity] = useState("");
-  const [image, setImage] = useState<string | undefined>(undefined);
-  const [state, setState] = useState("En service");
-  const [captain, setCaptain] = useState("");
-  const [description, setDescription] = useState("");
-  const [saving, setSaving] = useState(false);
-  const [drag, setDrag] = useState(false);
-  const fileRef = useRef<HTMLInputElement>(null);
+// Miniature du bateau (image ou icône par défaut)
+const BoatThumb: FC<{ boat: Boat; className?: string }> = ({ boat, className = "h-12 w-16" }) =>
+  boat.image ? (
+    <img
+      src={boat.image}
+      alt={String(boat.name)}
+      className={`${className} rounded-md object-cover border bg-slate-100`}
+    />
+  ) : (
+    <span className={`${className} rounded-md bg-slate-100 border flex items-center justify-center`}>
+      <Ship className="h-5 w-5 text-gray-400" />
+    </span>
+  );
 
-  const readFile = (f?: File) => {
-    if (!f) return;
-    if (!/^image\/(jpe?g|png)$/i.test(f.type)) { toast.error("Format accepté : JPG ou PNG."); return; }
-    if (f.size > MAX_MB * 1024 * 1024) { toast.error(`Image trop lourde (max ${MAX_MB} Mo).`); return; }
-    const r = new FileReader();
-    r.onload = () => setImage(String(r.result));
-    r.readAsDataURL(f);
-  };
-  const onFile = (e: ChangeEvent<HTMLInputElement>) => { readFile(e.target.files?.[0]); e.target.value = ""; };
-  const onDrop = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setDrag(false); readFile(e.dataTransfer.files?.[0]); };
+const BoatComponant: FC = () => {
+  const [showModalForm, setShowModalForm] = useState<boolean>(false);
+  const [showModal, setShowModal] = useState<boolean>(false);
+  const [currentBoat, setCurrentBoat] = useState<Boat>();
+  const [searchTerm, setSearchTerm] = useState("");
+  const [stateFilter, setStateFilter] = useState("all");
+  const [page, setPage] = useState(1);
 
-  const reset = () => { setId(""); setName(""); setCapacity(""); setImage(undefined); setState("En service"); setCaptain(""); setDescription(""); };
+  const boats = useSelector((state: RootState) => state.stJude.boat);
+  const allUsers = useSelector((state: RootState) => state.users.allUser);
 
-  const onSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!id.trim() || !name.trim() || !(Number(capacity) > 0)) {
-      toast.error("Veuillez renseigner le matricule, le nom et la capacité.");
-      return;
-    }
-    if (capitaines.length > 0 && !captain) {
-      toast.error("Veuillez choisir un capitaine.");
-      return;
-    }
-    const newBoat = {
-      id: id.trim(),
-      name: name.trim(),
-      capacity: Number(capacity),
-      state,
-      crew: captain ? [captain] : [],
-      image,
-      ...(description.trim() ? { description: description.trim() } : {}),
-      userId: currentUser ? currentUser.id : "",
-    } as Boat;
+  const capitaines = allUsers.filter(({ role }) => role === "Capitaine");
+  const boatS = boats.filter(({ state }) => state === "En service");
+  const boatC = boats.filter(({ state }) => state === "En construction");
 
-    setSaving(true);
-    try {
-      const response = await onAddService(TABLE_DATA_BASE.BOAT, newBoat);
-      if (response === "success") {
-        dispatch(setBoats(newBoat));
-        toast.success("Bateau ajouté avec succès !");
-        reset();
-        onClose?.();
-      } else {
-        toast.error("Erreur lors de l'ajout du bateau.");
-      }
-    } catch {
-      toast.error("Erreur lors de l'ajout du bateau.");
-    } finally {
-      setSaving(false);
-    }
+  const capitaineOf = (boat: Boat) => {
+    const c = capitaines.find(({ id }) => boat.crew?.includes(id));
+    return c ? `${c.name} ${c.lastName}` : "-";
   };
 
-  const now = new Date();
-  const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const input = "w-full h-12 border border-[#d3def2] rounded-lg bg-white px-4 text-sm text-[#10285e] placeholder:text-gray-400 outline-none focus:border-[#1255d6]";
+  const openBoat = (boat: Boat) => {
+    setCurrentBoat(boat);
+    setShowModal(true);
+  };
+
+  // Totaux
+  const totalCapacity = boats.reduce((s, b) => s + (Number(b.capacity) || 0), 0);
+  const pct = (n: number) => (boats.length ? Math.round((n / boats.length) * 100) : 0);
+
+  // États présents (pour le filtre et le donut)
+  const byState = useMemo(() => {
+    const map = new Map<string, number>();
+    boats.forEach((b) => map.set(b.state, (map.get(b.state) || 0) + 1));
+    return Array.from(map.entries());
+  }, [boats]);
+
+  const donut = useMemo(() => {
+    if (!boats.length) return "#e5e7eb";
+    let acc = 0;
+    const parts = byState.map(([state, n]) => {
+      const start = acc;
+      acc += (n / boats.length) * 100;
+      return `${stateMeta(state).color} ${start}% ${acc}%`;
+    });
+    return `conic-gradient(${parts.join(", ")})`;
+  }, [byState, boats.length]);
+
+  // Filtres + pagination
+  const filtered = boats.filter((b) => {
+    if (stateFilter !== "all" && b.state !== stateFilter) return false;
+    const q = norm(searchTerm);
+    if (!q) return true;
+    return (
+      norm(String(b.name)).includes(q) ||
+      norm(String(b.id)).includes(q) ||
+      norm(String(b.state)).includes(q)
+    );
+  });
+  const pages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const current = Math.min(page, pages);
+  const startIdx = (current - 1) * PAGE_SIZE;
+  const visible = filtered.slice(startIdx, startIdx + PAGE_SIZE);
 
   return (
-    <div className="bg-[#f3f7fd] min-h-full text-[#10285e]">
-      {/* Barre du haut */}
-      <div className="bg-white border-b border-[#e3eaf6] px-5 py-3 flex flex-wrap items-center gap-4">
-        <div className="relative flex-1 min-w-[260px] max-w-[500px]">
-          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#1255d6]" />
-          <input placeholder="Rechercher un bateau, un numéro, une capacité..." className="w-full bg-[#eef3fb] rounded-lg pl-11 pr-3 py-3 text-xs" />
-        </div>
-        <div className="ml-auto flex items-center gap-5">
-          <Bell size={22} className="text-[#1255d6]" />
-          <div className="flex items-center gap-2">
-            <div className="w-10 h-10 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={22} /></div>
-            <span className="text-sm text-[#1255d6]">{currentUser?.role === "Propriétaire" ? "Administrateur" : currentUser?.name ?? "Administrateur"}</span>
-            <ChevronDown size={14} />
-          </div>
-          <div className="flex items-center gap-2 text-xs font-semibold">
-            <Calendar size={26} className="text-[#1255d6]" />
-            <div><p className="capitalize">{dateLabel}</p><p>{pad(now.getHours())}:{pad(now.getMinutes())}</p></div>
-          </div>
-        </div>
+    <div className="flex flex-col bg-slate-50/60 p-4 min-h-screen text-primary">
+      {/* Header */}
+      <div className="mb-6">
+        <h2 className="text-2xl font-semibold text-primary">Gestion des Bateaux</h2>
+        <p className="text-gray-600">Construction des nouveaux bateaux, tonnage et volume</p>
       </div>
 
-      <div className="p-5 space-y-4">
-        {/* Bandeau titre */}
-        <div className="relative overflow-hidden rounded-xl bg-gradient-to-r from-[#f1f7ff] via-[#e6f1fd] to-[#cfe3f8]">
-          <svg className="absolute right-0 bottom-0 h-full w-[55%] opacity-70" viewBox="0 0 600 100" preserveAspectRatio="none">
-            <path d="M0,70 C80,45 170,95 270,68 C370,40 450,85 600,52 L600,100 L0,100 Z" fill="#b9d8f5" />
-            <path d="M0,86 C100,62 210,100 310,82 C410,62 510,96 600,78 L600,100 L0,100 Z" fill="#8fc0ee" />
-          </svg>
-          <div className="relative px-6 py-5 flex items-center gap-5">
-            <div className="w-[100px] h-[100px] rounded-full bg-[#0b3aa8] text-white flex items-center justify-center shrink-0 shadow-lg"><Ship size={52} /></div>
-            <div className="mr-auto">
-              <h1 className="text-4xl font-extrabold text-[#0b3aa8]">Ajouter un bateau</h1>
-              <p className="text-lg text-[#2a4f95]">Enregistrez un nouveau bateau dans le système</p>
+      {/* Cartes */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4 mb-6">
+        <Card className="border border-blue-200 bg-gradient-to-br from-blue-50 to-white shadow-sm">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <span className="h-12 w-12 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center">
+                <Ship className="h-6 w-6" />
+              </span>
+              <p className="font-semibold">Total des bateaux</p>
             </div>
-            {onClose && (
-              <button type="button" onClick={onClose} className="relative z-10 flex items-center gap-2 bg-white/80 hover:bg-white border border-[#9db8ea] text-[#1255d6] text-sm font-semibold px-4 py-2 rounded-lg"><ArrowLeft size={16} /> Retour à la liste</button>
-            )}
-            <Ship size={84} className="hidden md:block text-[#2f6fb8] mr-10" />
-          </div>
-        </div>
+            <p className="mt-3 text-3xl font-bold">{boats.length}</p>
+            <p className="text-xs text-gray-500">bateaux enregistrés</p>
+          </CardContent>
+        </Card>
 
-        {/* Formulaire */}
-        <form onSubmit={onSubmit} className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-7">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-8 gap-y-6">
-            <div className="md:pl-4">
-              <Label icon={<ClipboardList size={22} />} text="Matricule" required />
-              <input value={id} onChange={(e) => setId(e.target.value)} placeholder="Ex : MA-1234TA" className={input} />
+        <Card className="border border-green-200 bg-gradient-to-br from-green-50 to-white shadow-sm">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <span className="h-12 w-12 rounded-full bg-green-600 text-white flex items-center justify-center">
+                <Cog className="h-6 w-6" />
+              </span>
+              <p className="font-semibold">En service</p>
             </div>
-            <div>
-              <Label icon={<Ship size={22} />} text="Nom" required />
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ex : St Jude" className={input} />
-            </div>
+            <p className="mt-3 text-3xl font-bold">{boatS.length}</p>
+            <p className="text-xs text-gray-500">bateaux disponibles</p>
+            <span className="mt-2 inline-block rounded-full bg-green-100 px-2 py-0.5 text-[11px] text-green-700">
+              {pct(boatS.length)}% en service
+            </span>
+          </CardContent>
+        </Card>
 
-            <div className="md:pl-4">
-              <Label icon={<Weight size={22} />} text="Capacité en tonnage (T)" required />
-              <input type="number" min={0} value={capacity} onChange={(e) => setCapacity(e.target.value)} placeholder="Ex : 5000" className={input} />
+        <Card className="border border-orange-200 bg-gradient-to-br from-orange-50 to-white shadow-sm">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <span className="h-12 w-12 rounded-full bg-orange-500 text-white flex items-center justify-center">
+                <Hammer className="h-6 w-6" />
+              </span>
+              <p className="font-semibold">En construction</p>
             </div>
-            <div>
-              <Label icon={<ImageIcon size={22} />} text="Image du bateau" />
-              <div className="grid grid-cols-1 sm:grid-cols-[1fr_180px] gap-4">
-                <div
-                  onClick={() => fileRef.current?.click()}
-                  onDragOver={(e) => { e.preventDefault(); setDrag(true); }}
-                  onDragLeave={() => setDrag(false)}
-                  onDrop={onDrop}
-                  className={`min-h-[136px] rounded-lg border-2 border-dashed flex flex-col items-center justify-center text-center cursor-pointer px-4 ${drag ? "border-[#1255d6] bg-[#e6f0ff]" : "border-[#8fb3ee] bg-[#f3f8ff]"}`}
-                >
-                  <UploadCloud size={30} className="text-[#1255d6] mb-2" />
-                  <p className="text-sm text-[#2a4f95]">Glissez une image ici ou cliquez pour parcourir</p>
-                  <p className="text-xs text-gray-500 mt-2">Formats acceptés : JPG, PNG (Max {MAX_MB} Mo)</p>
-                  <input ref={fileRef} type="file" accept="image/png,image/jpeg" onChange={onFile} className="hidden" />
-                </div>
-                {image && (
-                  <div className="relative rounded-lg border border-[#d3def2] overflow-hidden bg-white">
-                    <img src={image} alt="Aperçu" className="w-full h-[96px] object-cover" />
-                    <button type="button" onClick={() => setImage(undefined)} className="absolute top-2 right-2 w-6 h-6 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><X size={14} /></button>
-                    <button type="button" onClick={() => fileRef.current?.click()} className="w-full flex items-center justify-center gap-2 text-sm font-semibold text-[#1255d6] py-2"><ImageIcon size={16} /> Changer l'image</button>
+            <p className="mt-3 text-3xl font-bold">{boatC.length}</p>
+            <p className="text-xs text-gray-500">bateaux en cours</p>
+            <span className="mt-2 inline-block rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-orange-700">
+              {pct(boatC.length)}% en construction
+            </span>
+          </CardContent>
+        </Card>
+
+        <Card className="border border-purple-200 bg-gradient-to-br from-purple-50 to-white shadow-sm">
+          <CardContent className="pt-6">
+            <div className="flex items-center gap-3">
+              <span className="h-12 w-12 rounded-full bg-purple-600 text-white flex items-center justify-center">
+                <Gauge className="h-6 w-6" />
+              </span>
+              <p className="font-semibold">Capacité totale</p>
+            </div>
+            <p className="mt-3 text-3xl font-bold text-purple-800">{nf(totalCapacity)} T</p>
+            <p className="text-xs text-gray-500">tonnage total</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-6">
+        {/* Colonne gauche */}
+        <div className="flex flex-col gap-6 min-w-0">
+          {/* Liste */}
+          <Card className="border-0 shadow-sm">
+            <CardHeader>
+              <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                <CardTitle className="flex items-center gap-3">
+                  <span className="h-9 w-9 rounded-lg bg-blue-600 text-white flex items-center justify-center">
+                    <ListChecks className="h-5 w-5" />
+                  </span>
+                  <span>
+                    Liste des bateaux <span className="text-blue-600">({filtered.length})</span>
+                  </span>
+                </CardTitle>
+                <div className="flex flex-col sm:flex-row gap-3">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+                    <Input
+                      placeholder="Rechercher un bateau..."
+                      value={searchTerm}
+                      onChange={(e) => {
+                        setSearchTerm(e.target.value);
+                        setPage(1);
+                      }}
+                      className="pl-10 sm:w-56"
+                    />
                   </div>
-                )}
+                  <Select
+                    value={stateFilter}
+                    onValueChange={(v) => {
+                      setStateFilter(v);
+                      setPage(1);
+                    }}
+                  >
+                    <SelectTrigger className="w-full sm:w-40">
+                      <Filter className="h-4 w-4 mr-2" />
+                      <SelectValue placeholder="Tous" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">Tous</SelectItem>
+                      {byState.map(([state]) => (
+                        <SelectItem key={state} value={state}>{state}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => setShowModalForm(true)}>
+                    <Plus className="h-4 w-4 mr-2" /> Nouveau bateau
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-blue-50/60">
+                      <TableHead className="w-10">#</TableHead>
+                      <TableHead>Image</TableHead>
+                      <TableHead>Matricule</TableHead>
+                      <TableHead>Nom</TableHead>
+                      <TableHead>Capacité (T)</TableHead>
+                      <TableHead>État</TableHead>
+                      <TableHead>Capitaine</TableHead>
+                      <TableHead className="text-center">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {visible.map((boat, i) => (
+                      <TableRow
+                        key={`${boat.id}-${startIdx + i}`}
+                        className="hover:bg-blue-50/40 cursor-pointer"
+                        onClick={() => openBoat(boat)}
+                      >
+                        <TableCell className="text-gray-500">{startIdx + i + 1}</TableCell>
+                        <TableCell>
+                          <BoatThumb boat={boat} />
+                        </TableCell>
+                        <TableCell className="font-medium text-[#001F3F]">{boat.id}</TableCell>
+                        <TableCell className="font-medium">{boat.name}</TableCell>
+                        <TableCell>{nf(Number(boat.capacity) || 0)}</TableCell>
+                        <TableCell><StateBadge state={boat.state} /></TableCell>
+                        <TableCell>{capitaineOf(boat)}</TableCell>
+                        <TableCell className="text-center">
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            className="text-blue-600"
+                            title="Voir les détails"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openBoat(boat);
+                            }}
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+
+              {filtered.length === 0 && (
+                <div className="text-center py-8 text-gray-500 flex flex-col items-center">
+                  <Ship className="h-12 w-12 mb-2" />
+                  <p>Aucun bateau trouvé</p>
+                </div>
+              )}
+
+              {filtered.length > 0 && (
+                <div className="mt-4 flex items-center justify-between text-xs text-gray-500">
+                  <span>
+                    Affichage de {startIdx + 1} à {startIdx + visible.length} sur {filtered.length} bateaux
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button size="icon" variant="outline" disabled={current <= 1} onClick={() => setPage(current - 1)}>
+                      <ChevronLeft className="h-4 w-4" />
+                    </Button>
+                    <span className="h-8 min-w-8 px-2 rounded-md bg-blue-600 text-white flex items-center justify-center">
+                      {current}
+                    </span>
+                    <Button size="icon" variant="outline" disabled={current >= pages} onClick={() => setPage(current + 1)}>
+                      <ChevronRight className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Détails des bateaux */}
+          <Card className="border-0 shadow-sm overflow-hidden">
+            <div className="grid grid-cols-1 md:grid-cols-[240px_1fr]">
+              <div className="relative min-h-[200px] bg-gradient-to-b from-sky-500 via-blue-700 to-blue-950 text-white p-5 flex flex-col justify-end">
+                <Ship className="absolute top-6 left-1/2 -translate-x-1/2 h-20 w-20 opacity-30" />
+                <p className="text-2xl font-bold">{boats.length} {boats.length > 1 ? "bateaux" : "bateau"}</p>
+                <p className="text-sm text-blue-100">pour vos opérations de transport</p>
+              </div>
+              <div className="p-5">
+                <h3 className="font-semibold mb-4">Détails des bateaux</h3>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                  {boats.slice(0, 4).map((boat, i) => (
+                    <div key={`${boat.id}-${i}`} className="rounded-xl border bg-white p-4 shadow-sm">
+                      <BoatThumb boat={boat} className="mb-3 h-32 w-full" />
+                      <p className="flex items-center gap-2 font-semibold">
+                        <Ship className="h-5 w-5 text-blue-700" /> Bateau {boat.id} ({boat.name})
+                      </p>
+                      <p className="mt-2 text-sm text-gray-600">Capacité : {nf(Number(boat.capacity) || 0)} T</p>
+                      <p className="mt-1 text-sm text-gray-600 flex items-center gap-2">
+                        État : <StateBadge state={boat.state} />
+                      </p>
+                      <p className="mt-1 text-sm text-gray-600">Capitaine : {capitaineOf(boat)}</p>
+                      <button
+                        type="button"
+                        className="mt-3 inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
+                        onClick={() => openBoat(boat)}
+                      >
+                        Voir les détails <ArrowRight className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+                {boats.length === 0 && <p className="text-sm text-gray-500">Aucun bateau enregistré</p>}
               </div>
             </div>
+          </Card>
+        </div>
 
-            <div className="md:pl-4">
-              <Label icon={<Settings size={22} />} text="État du bateau" required />
-              <div className="relative">
-                <span className={`absolute left-4 top-1/2 -translate-y-1/2 w-3 h-3 rounded-full ${dotColor(state)}`} />
-                <select value={state} onChange={(e) => setState(e.target.value)} className={`${input} appearance-none pl-11 pr-10`}>
-                  {STATES.map((s) => <option key={s} value={s}>{s}</option>)}
-                </select>
-                <ChevronDown size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
+        {/* Colonne droite */}
+        <div className="flex flex-col gap-6">
+          {/* Répartition par état */}
+          <Card className="border-0 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Ship className="h-5 w-5" /> Répartition par état
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex items-center gap-4">
+                <div className="relative h-36 w-36 rounded-full shrink-0" style={{ background: donut }}>
+                  <div className="absolute inset-[18%] rounded-full bg-white flex flex-col items-center justify-center">
+                    <span className="text-[11px] text-gray-500">Total</span>
+                    <span className="text-xl font-bold">{boats.length}</span>
+                  </div>
+                </div>
+                <ul className="flex-1 space-y-2 text-sm">
+                  {byState.map(([state, n]) => (
+                    <li key={state} className="flex items-start gap-2">
+                      <span className="mt-1.5 h-2.5 w-2.5 rounded-full shrink-0" style={{ background: stateMeta(state).color }} />
+                      <span>
+                        {state}
+                        <span className="block text-xs text-gray-500">{n} ({pct(n)}%)</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
               </div>
-            </div>
-            <div>
-              <Label icon={<User size={22} />} text="Capitaine" required />
-              <div className="relative">
-                <select value={captain} onChange={(e) => setCaptain(e.target.value)} className={`${input} appearance-none pr-10 ${captain ? "" : "text-gray-400"}`}>
-                  <option value="">Choisir un capitaine...</option>
-                  {capitaines.map((c) => <option key={c.id} value={c.id} className="text-[#10285e]">{`${c.name} ${c.lastName}`}</option>)}
-                </select>
-                <ChevronDown size={18} className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-500 pointer-events-none" />
-              </div>
-            </div>
-          </div>
+            </CardContent>
+          </Card>
 
-          <div className="mt-6 md:pl-4">
-            <Label icon={<FileText size={22} />} text="Description / Remarques" />
-            <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3}
-              placeholder="Informations supplémentaires sur le bateau (type, équipements, etc.)..."
-              className="w-full border border-[#d3def2] rounded-lg bg-white px-4 py-3 text-sm placeholder:text-gray-400 outline-none focus:border-[#1255d6] resize-y" />
-          </div>
+          {/* Capacité par bateau */}
+          <Card className="border-0 shadow-sm">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2 text-base">
+                <Gauge className="h-5 w-5" /> Capacité par bateau
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {boats.slice(0, 6).map((boat, i) => {
+                const cap = Number(boat.capacity) || 0;
+                const share = totalCapacity > 0 ? (cap / totalCapacity) * 100 : 0;
+                return (
+                  <div key={`${boat.id}-${i}`}>
+                    <div className="flex justify-between text-xs">
+                      <span className="font-medium">Bateau {boat.id} ({boat.name})</span>
+                      <span className="text-gray-500">
+                        {nf(cap)} T / {nf(totalCapacity)} T
+                        <span className="ml-2 font-semibold text-blue-700">
+                          {share.toLocaleString("fr-FR", { maximumFractionDigits: 2 })}%
+                        </span>
+                      </span>
+                    </div>
+                    <div className="mt-1 h-2 rounded-full bg-gray-100 overflow-hidden">
+                      <div className="h-full rounded-full bg-blue-600" style={{ width: `${Math.max(share, 1)}%` }} />
+                    </div>
+                  </div>
+                );
+              })}
+              {boats.length === 0 && <p className="text-sm text-gray-500">Aucune donnée</p>}
+            </CardContent>
+          </Card>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-6">
-            <button type="button" onClick={reset} className="h-12 rounded-lg border border-[#9db8ea] text-[#1255d6] font-semibold flex items-center justify-center gap-2 hover:bg-blue-50">
-              <RotateCcw size={18} /> Réinitialiser
-            </button>
-            <button type="submit" disabled={saving} className="h-12 rounded-lg bg-[#1255d6] hover:bg-[#0e45b3] text-white font-semibold flex items-center justify-center gap-2 disabled:opacity-60">
-              <Save size={18} /> {saving ? "Enregistrement..." : "Enregistrer"}
-            </button>
-          </div>
-        </form>
+          {/* Assistant IA – Bateaux */}
+          <AiFinanceChat scope="boats" />
+        </div>
       </div>
+
+      {showModalForm && <BoatForm onClose={() => setShowModalForm(false)} />}
+      {showModal && currentBoat && (
+        <BoatModal currentBoat={currentBoat} onClose={() => setShowModal(false)} />
+      )}
     </div>
   );
 };
 
-export default BoatForm;
+export default BoatComponant;
