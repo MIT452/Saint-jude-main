@@ -24,9 +24,9 @@ export async function askAI(prompt: string): Promise<string | null> {
   try {
     const t = token();
     const res = await fetch(`${baseUrl()}/ai/chat`, {
-      method: "POST",
+      method: "POST", credentials: "include",
       headers: { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) },
-      body: JSON.stringify({ message: prompt, messages: [{ role: "user", content: prompt }] }),
+      body: JSON.stringify({ question: prompt, message: prompt, messages: [{ role: "user", content: prompt }] }),
     });
     if (!res.ok) return null;
     return pickText(await res.json());
