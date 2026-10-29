@@ -1,10 +1,10 @@
-import { useState } from "react";
-import type { FormEvent, ReactNode } from "react";
+import { useRef, useState } from "react";
+import type { ChangeEvent, FormEvent, ReactNode } from "react";
 import { useDispatch } from "react-redux";
 import { AppDispatch } from "../redux";
 import { setCurrentUser } from "../redux/feature/users";
 import {
-  Anchor, ArrowRight, Bell, Bot, CalendarDays, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
+  Anchor, ArrowRight, Bell, Bot, CalendarDays, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
   Ship, ShieldCheck, User, UserPlus,
 } from "lucide-react";
 import { loginUser, registerUser } from "../data/service";
@@ -45,6 +45,36 @@ const RULES: Array<[string, (p: string) => boolean]> = [
 const isStrong = (p: string) => RULES.every(([, ok]) => ok(p));
 
 const script = { fontFamily: "'Brush Script MT','Segoe Script',cursive" } as const;
+
+/* ---------- Photo de profil choisie dans l'explorateur de fichiers ----------
+   Même clé que la page Profil : la photo choisie ici s'y retrouve ensuite. */
+const photoKey = (id: unknown) => `profilePhoto:${String(id ?? "")}`;
+
+// Recadre en carré et réduit l'image (256 px, JPEG) pour qu'elle reste légère
+const resizeImage = (file: File, max = 256): Promise<string> =>
+  new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("lecture"));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error("image"));
+      img.onload = () => {
+        const side = Math.min(img.width, img.height);
+        const sx = (img.width - side) / 2;
+        const sy = (img.height - side) / 2;
+        const size = Math.min(max, side);
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return reject(new Error("canvas"));
+        ctx.drawImage(img, sx, sy, side, side, 0, 0, size, size);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.src = String(reader.result);
+    };
+    reader.readAsDataURL(file);
+  });
 
 /* ---------- Petits composants (hors de AuthPage pour ne pas perdre le focus à chaque frappe) ---------- */
 const Logo = () => (
@@ -162,6 +192,29 @@ const AuthPage = () => {
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [photo, setPhoto] = useState<string | undefined>(undefined);
+  const [photoError, setPhotoError] = useState("");
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = ""; // permet de rechoisir le même fichier
+    if (!f) return;
+    setPhotoError("");
+    if (!f.type.startsWith("image/")) {
+      setPhotoError("Veuillez choisir une image (JPG, PNG…).");
+      return;
+    }
+    if (f.size > 8 * 1024 * 1024) {
+      setPhotoError("Image trop lourde (8 Mo maximum).");
+      return;
+    }
+    try {
+      setPhoto(await resizeImage(f));
+    } catch {
+      setPhotoError("Impossible de lire cette image.");
+    }
+  };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -183,6 +236,15 @@ const AuthPage = () => {
       const user = isRegistering
         ? await registerUser({ name, lastName, email: login, tel, password })
         : await loginUser({ email: login, password });
+      // La photo choisie est conservée pour ce compte (retrouvée ensuite dans « Mon profil »)
+      if (isRegistering && photo) {
+        try {
+          const newId = (user as { id?: unknown } | null)?.id;
+          if (newId !== undefined && newId !== null) localStorage.setItem(photoKey(newId), photo);
+        } catch {
+          /* stockage plein ou indisponible : l'inscription continue sans photo */
+        }
+      }
       dispatch(setCurrentUser(user));
     } catch (requestError) {
       const responseError = requestError as { response?: { data?: { error?: string } } };
@@ -227,6 +289,28 @@ const AuthPage = () => {
               </div>
               <h1 className="text-3xl font-extrabold text-[#0b3aa8]">Créer un compte</h1>
               <p className="text-[#3e5788] mt-2">Rejoignez SAINT-JUDE et accédez à vos réservations en toute sécurité.</p>
+            </div>
+
+            {/* Photo de profil (facultative) : choisie depuis l'explorateur de fichiers */}
+            <div className="flex flex-col items-center gap-2">
+              <div className="relative">
+                {photo ? (
+                  <img src={photo} alt="Votre photo" className="w-24 h-24 rounded-full object-cover border-4 border-[#dcebfb]" />
+                ) : (
+                  <span className="w-24 h-24 rounded-full bg-[#dcebfb] text-[#1255d6] flex items-center justify-center border-4 border-white shadow">
+                    <User size={40} />
+                  </span>
+                )}
+                <button type="button" onClick={() => fileRef.current?.click()} title="Choisir une photo"
+                  className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white">
+                  <Camera size={16} />
+                </button>
+                <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} className="hidden" />
+              </div>
+              <button type="button" onClick={() => fileRef.current?.click()} className="text-xs text-[#1255d6] hover:underline">
+                {photo ? "Changer la photo" : "Ajouter une photo (facultatif)"}
+              </button>
+              {photoError && <p className="text-xs text-red-600">{photoError}</p>}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
