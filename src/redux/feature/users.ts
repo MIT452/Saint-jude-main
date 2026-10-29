@@ -22,67 +22,58 @@ function loadFromLocalStorage<T>(key: string, fallback: T): T {
   }
 }
 
-// Sauvegarde auto dans localStorage
-// const saveToLocalStorage = (state: usersState) => {
-//   localStorage.setItem("users", JSON.stringify(state.allUser));
-// };
+// Utilisateurs par défaut
+const DEFAULT_USERS: User[] = [
+  {
+    id: "u1",
+    name: "Jean",
+    lastName: "Paul",
+    password: "abcdef",
+    email: "jean@example.com",
+    tel: "0347654321",
+    role: "Propriétaire",
+  },
+  {
+    id: "u2",
+    name: "Marie",
+    lastName: "Dupont",
+    password: "0000",
+    email: "marie@example.com",
+    tel: "0341234567",
+    role: "Agent",
+  },
+  {
+    id: "u4",
+    name: "Nathan",
+    lastName: "Jao",
+    password: "0000",
+    email: "nathan@example.com",
+    tel: "0341234567",
+    role: "Capitaine",
+  },
+  {
+    id: "u3",
+    name: "Maël",
+    lastName: "Fix",
+    password: "0000",
+    email: "mael@example.com",
+    tel: "0341234567",
+    role: "Agent",
+  },
+] as User[];
 
-// Charger depuis localStorage si dispo
-// const storedList = localStorage.getItem("users");
-// const initialState: usersState = {
-//   currentUser: localStorage.getItem("currentUser")
-//     ? JSON.parse(localStorage.getItem("currentUser") as string)
-//     : null,
-//   allUser: storedList
-//     ? JSON.parse(storedList)
-//     : [
-// Initial State
+// Si le localStorage contient une liste vide, on revient aux utilisateurs par défaut
+const storedUsers = loadFromLocalStorage<User[]>("users", DEFAULT_USERS);
+
 const initialState: usersState = {
   currentUser: loadFromLocalStorage<User | null>("currentUser", null),
-  allUser: loadFromLocalStorage<User[]>("users", [
-        {
-          id: "u1",
-          name: "Jean",
-          lastName: "Paul",
-          password: "abcdef",
-          email: "jean@example.com",
-          tel: "0347654321",
-          role: "Propriétaire",
-        },
-        {
-          id: "u2",
-          name: "Marie",
-          lastName: "Dupont",
-          password: "0000",
-          email: "marie@example.com",
-          tel: "0341234567",
-          role: "Agent",
-        },
-        {
-          id: "u4",
-          name: "Nathan",
-          lastName: "Jao",
-          password: "0000",
-          email: "nathan@example.com",
-          tel: "0341234567",
-          role: "Capitaine",
-        },
-        {
-          id: "u3",
-          name: "Maël",
-          lastName: "Fix",
-          password: "0000",
-          email: "mael@example.com",
-          tel: "0341234567",
-          role: "Agent",
-        },
-      ]),
+  allUser: Array.isArray(storedUsers) && storedUsers.length > 0 ? storedUsers : DEFAULT_USERS,
   loading: false,
   error: null,
   success: null,
 };
 
-// Sauvegarde automatique dans localStorage (middleware possible)
+// Sauvegarde automatique dans localStorage
 const saveToLocalStorage = (state: usersState) => {
   try {
     localStorage.setItem("users", JSON.stringify(state.allUser));
@@ -97,47 +88,42 @@ const saveToLocalStorage = (state: usersState) => {
 };
 
 // Thunks simulant le backend
-export const fetchPersonnels = createAsyncThunk<User[]>(
+export const fetchPersonnels = createAsyncThunk<User[], void, { state: { users: usersState } }>(
   "users/fetchPersonnels",
-  async () => {
-    return new Promise<User[]>((resolve) =>
-      setTimeout(() => resolve(initialState.allUser), 500)
+  async (_, { getState }) => {
+    const current = getState().users.allUser;
+    return new Promise<User[]>((resolve) => setTimeout(() => resolve(current), 300));
+  }
+);
+
+export const addPersonnel = createAsyncThunk<User, Omit<User, "id" | "password">>(
+  "users/addPersonnel",
+  async (newUser) => {
+    return new Promise<User>((resolve) =>
+      setTimeout(
+        () =>
+          resolve({
+            ...newUser,
+            id: uuid(),
+            password: "0000", // mot de passe par défaut
+          } as User),
+        300
+      )
     );
   }
 );
 
-export const addPersonnel = createAsyncThunk<
-  User,
-  Omit<User, "id" | "password">
->("users/addPersonnel", async (newUser) => {
-  return new Promise<User>((resolve) =>
-    setTimeout(
-      () =>
-        resolve({
-          ...newUser,
-          id: uuid(),
-          password: "0000", // mot de passe par défaut
-        }),
-      500
-    )
-  );
-});
-
 export const updatePersonnel = createAsyncThunk<User, User>(
   "users/updatePersonnel",
   async (updatedUser) => {
-    return new Promise<User>((resolve) =>
-      setTimeout(() => resolve(updatedUser), 500)
-    );
+    return new Promise<User>((resolve) => setTimeout(() => resolve(updatedUser), 300));
   }
 );
 
 export const deletePersonnel = createAsyncThunk<string, string>(
   "users/deletePersonnel",
   async (userId) => {
-    return new Promise<string>((resolve) =>
-      setTimeout(() => resolve(userId), 500)
-    );
+    return new Promise<string>((resolve) => setTimeout(() => resolve(userId), 300));
   }
 );
 
@@ -145,26 +131,20 @@ export const updateOwnPassword = createAsyncThunk<
   { userId: string; newPassword: string },
   { userId: string; oldPassword: string; newPassword: string },
   { state: { users: usersState } }
->(
-  "users/updateOwnPassword",
-  async (
-    { userId, oldPassword, newPassword },
-    { getState, rejectWithValue }
-  ) => {
-    const state = getState().users;
-    const user = state.allUser.find((u) => u.id === userId);
+>("users/updateOwnPassword", async ({ userId, oldPassword, newPassword }, { getState, rejectWithValue }) => {
+  const state = getState().users;
+  const user = state.allUser.find((u) => u.id === userId);
 
-    if (!user) {
-      return rejectWithValue("Utilisateur introuvable");
-    }
-
-    if (user.password !== oldPassword) {
-      return rejectWithValue("Ancien mot de passe incorrect");
-    }
-
-    return { userId, newPassword };
+  if (!user) {
+    return rejectWithValue("Utilisateur introuvable");
   }
-);
+
+  if (user.password !== oldPassword) {
+    return rejectWithValue("Ancien mot de passe incorrect");
+  }
+
+  return { userId, newPassword };
+});
 
 const usersSlice = createSlice({
   name: "users",
@@ -188,13 +168,10 @@ const usersSlice = createSlice({
         state.loading = true;
         state.error = null;
       })
-      .addCase(
-        fetchPersonnels.fulfilled,
-        (state, action: PayloadAction<User[]>) => {
-          state.allUser = action.payload;
-          state.loading = false;
-        }
-      )
+      .addCase(fetchPersonnels.fulfilled, (state, action: PayloadAction<User[]>) => {
+        state.allUser = action.payload;
+        state.loading = false;
+      })
       .addCase(fetchPersonnels.rejected, (state, action) => {
         state.loading = false;
         state.error = action.error.message || "Erreur de chargement";
@@ -205,31 +182,23 @@ const usersSlice = createSlice({
         saveToLocalStorage(state);
       })
 
-      .addCase(
-        updatePersonnel.fulfilled,
-        (state, action: PayloadAction<User>) => {
-          const idx = state.allUser.findIndex(
-            (u) => u.id === action.payload.id
-          );
-          if (idx !== -1) {
-            // garder l’ancien mot de passe
-            const oldPassword = state.allUser[idx].password;
-            state.allUser[idx] = {
-              ...action.payload,
-              password: oldPassword,
-            };
-            saveToLocalStorage(state);
-          }
-        }
-      )
-
-      .addCase(
-        deletePersonnel.fulfilled,
-        (state, action: PayloadAction<string>) => {
-          state.allUser = state.allUser.filter((u) => u.id !== action.payload);
+      .addCase(updatePersonnel.fulfilled, (state, action: PayloadAction<User>) => {
+        const idx = state.allUser.findIndex((u) => u.id === action.payload.id);
+        if (idx !== -1) {
+          // garder l'ancien mot de passe
+          const oldPassword = state.allUser[idx].password;
+          state.allUser[idx] = {
+            ...action.payload,
+            password: oldPassword,
+          };
           saveToLocalStorage(state);
         }
-      )
+      })
+
+      .addCase(deletePersonnel.fulfilled, (state, action: PayloadAction<string>) => {
+        state.allUser = state.allUser.filter((u) => u.id !== action.payload);
+        saveToLocalStorage(state);
+      })
 
       .addCase(updateOwnPassword.fulfilled, (state, action) => {
         const user = state.allUser.find((u) => u.id === action.payload.userId);

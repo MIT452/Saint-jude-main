@@ -5,32 +5,27 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
-import { useSelector } from "react-redux";
-import { RootState } from "../redux";
+import { useSelector, useDispatch } from "react-redux";
+import { RootState, AppDispatch } from "../redux";
+import { addPersonnel, updatePersonnel, deletePersonnel } from "../redux/feature/users";
 
 interface Props {
   onAdd?: () => void;
   onView?: (user: any) => void;
   onEdit?: (user: any) => void;
   onDelete?: (user: any) => void;
-  /** Optionnel : si fourni, reçoit les données du formulaire d'ajout (sinon POST vers ADD_ENDPOINT) */
-  onCreate?: (data: NewUser) => Promise<void> | void;
 }
 
-interface NewUser {
+interface FormData {
   name: string;
   lastName: string;
   email: string;
-  phone: string;
+  tel: string;
   role: string;
-  password: string;
 }
 
-// À ADAPTER si ton API est différente
-const API_URL = (import.meta as any).env?.VITE_API_URL ?? "";
-const ADD_ENDPOINT = `${API_URL}/api/users`;
 const ROLE_OPTIONS = ["Capitaine", "Gestionnaire", "Agent"];
-const EMPTY_FORM: NewUser = { name: "", lastName: "", email: "", phone: "", role: "Agent", password: "" };
+const EMPTY_FORM: FormData = { name: "", lastName: "", email: "", tel: "", role: "Agent" };
 
 const PAGE = 5;
 const DAY = 86400000;
@@ -57,7 +52,8 @@ const stOf = (s: any): St => {
 const stBadge: Record<string, string> = { present: "bg-[#d9f5e6] text-[#14894f]", conge: "bg-[#ffe9cc] text-[#d97706]", absent: "bg-[#ffe3e3] text-[#d02925]" };
 const stLabel: Record<string, string> = { present: "Actif", conge: "Congé", absent: "Absent" };
 
-const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCreate }) => {
+const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
+  const dispatch = useDispatch<AppDispatch>();
   const allUser = useSelector((state: RootState) => state.users.allUser) as any[];
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
 
@@ -70,41 +66,53 @@ const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCre
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any | null>(null);
-  const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState<NewUser>(EMPTY_FORM);
-  const [saving, setSaving] = useState(false);
+  const [showForm, setShowForm] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [formError, setFormError] = useState("");
 
   const handleAdd = () => {
-    if (onAdd) onAdd();
-    else { setForm(EMPTY_FORM); setFormError(""); setShowAdd(true); }
+    if (onAdd) return onAdd();
+    setEditId(null);
+    setForm(EMPTY_FORM);
+    setFormError("");
+    setShowForm(true);
   };
 
-  const submitAdd = async () => {
-    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
-      setFormError("Nom, email et mot de passe sont obligatoires.");
+  const handleEdit = (raw: any) => {
+    if (onEdit) return onEdit(raw);
+    setEditId(String(raw.id ?? raw._id));
+    setForm({
+      name: raw.name ?? "",
+      lastName: raw.lastName ?? "",
+      email: raw.email ?? "",
+      tel: raw.tel ?? raw.phone ?? "",
+      role: raw.role ?? "Agent",
+    });
+    setFormError("");
+    setShowForm(true);
+  };
+
+  const submitForm = async () => {
+    if (!form.name.trim() || !form.email.trim()) {
+      setFormError("Prénom et email sont obligatoires.");
       return;
     }
-    setSaving(true);
-    setFormError("");
-    try {
-      if (onCreate) await onCreate(form);
-      else {
-        const res = await fetch(ADD_ENDPOINT, {
-          method: "POST",
-          credentials: "include", // cookie de session (comme axios withCredentials)
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(form),
-        });
-        if (!res.ok) throw new Error(`Erreur ${res.status}`);
-      }
-      setShowAdd(false);
-      window.location.reload();
-    } catch (e: any) {
-      setFormError(e?.message ?? "Échec de l'ajout.");
-    } finally {
-      setSaving(false);
+    const exists = (allUser ?? []).some(
+      (u) => u.email?.toLowerCase() === form.email.trim().toLowerCase() && String(u.id ?? u._id) !== editId
+    );
+    if (exists) {
+      setFormError("Cet email existe déjà.");
+      return;
     }
+    const data = { ...form, name: form.name.trim(), lastName: form.lastName.trim(), email: form.email.trim() };
+    if (editId) {
+      const old = (allUser ?? []).find((u) => String(u.id ?? u._id) === editId);
+      await dispatch(updatePersonnel({ ...old, ...data } as any));
+    } else {
+      await dispatch(addPersonnel(data as any));
+    }
+    setShowForm(false);
   };
 
   // ---------- Normalisation des vrais utilisateurs
@@ -215,7 +223,9 @@ const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCre
   const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
 
   const remove = (p: (typeof people)[number]) => {
-    if (onDelete && window.confirm(`Supprimer ${p.name} ?`)) onDelete(p.raw);
+    if (!window.confirm(`Supprimer ${p.name} ?`)) return;
+    if (onDelete) onDelete(p.raw);
+    else dispatch(deletePersonnel(String(p.raw.id ?? p.raw._id)));
   };
 
   const now = new Date();
@@ -403,7 +413,7 @@ const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCre
                     <td className="px-3 py-3">
                       <span className="flex items-center gap-2">
                         <button type="button" onClick={() => (onView ? onView(p.raw) : setDetail(p))} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Voir"><Eye size={15} /></button>
-                        <button type="button" onClick={() => onEdit?.(p.raw)} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Modifier"><Pencil size={15} /></button>
+                        <button type="button" onClick={() => handleEdit(p.raw)} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Modifier"><Pencil size={15} /></button>
                         <button type="button" onClick={() => remove(p)} className="w-8 h-8 rounded-md bg-[#ffe3e3] text-[#e5342f] flex items-center justify-center" title="Supprimer"><Trash2 size={15} /></button>
                       </span>
                     </td>
@@ -423,28 +433,28 @@ const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCre
         </div>
       </div>
 
-      {showAdd && (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !saving && setShowAdd(false)}>
+      {showForm && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setShowForm(false)}>
           <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="font-bold">Ajouter un personnel</h3>
-              <button type="button" onClick={() => setShowAdd(false)}><X size={18} /></button>
+              <h3 className="font-bold">{editId ? "Modifier le personnel" : "Ajouter un personnel"}</h3>
+              <button type="button" onClick={() => setShowForm(false)}><X size={18} /></button>
             </div>
             <div className="grid grid-cols-2 gap-3 text-xs">
               <input placeholder="Prénom *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="border rounded-lg px-3 py-2.5" />
               <input placeholder="Nom" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} className="border rounded-lg px-3 py-2.5" />
               <input placeholder="Email *" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="border rounded-lg px-3 py-2.5 col-span-2" />
-              <input placeholder="Téléphone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="border rounded-lg px-3 py-2.5" />
+              <input placeholder="Téléphone" value={form.tel} onChange={(e) => setForm({ ...form, tel: e.target.value })} className="border rounded-lg px-3 py-2.5" />
               <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="border rounded-lg px-3 py-2.5">
-                {ROLE_OPTIONS.map((r) => <option key={r}>{r}</option>)}
+                {Array.from(new Set([...ROLE_OPTIONS, form.role])).map((r) => <option key={r}>{r}</option>)}
               </select>
-              <input placeholder="Mot de passe *" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="border rounded-lg px-3 py-2.5 col-span-2" />
             </div>
-            {formError && <p className="text-xs text-red-600 mt-3">{formError}</p>}
+            {!editId && <p className="text-[11px] text-gray-500 mt-3">Mot de passe par défaut : 0000</p>}
+            {formError && <p className="text-xs text-red-600 mt-2">{formError}</p>}
             <div className="flex justify-end gap-2 mt-4">
-              <button type="button" disabled={saving} onClick={() => setShowAdd(false)} className="border rounded-lg px-4 py-2 text-xs font-semibold">Annuler</button>
-              <button type="button" disabled={saving} onClick={submitAdd} className="bg-[#1255d6] hover:bg-[#0e45b3] text-white rounded-lg px-5 py-2 text-xs font-semibold disabled:opacity-60">
-                {saving ? "Enregistrement..." : "Enregistrer"}
+              <button type="button" onClick={() => setShowForm(false)} className="border rounded-lg px-4 py-2 text-xs font-semibold">Annuler</button>
+              <button type="button" onClick={submitForm} className="bg-[#1255d6] hover:bg-[#0e45b3] text-white rounded-lg px-5 py-2 text-xs font-semibold">
+                {editId ? "Enregistrer" : "Ajouter"}
               </button>
             </div>
           </div>
