@@ -194,13 +194,19 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
 
       <div className="p-5 space-y-4">
         {/* Titre */}
-        <div className="flex items-center gap-4">
-          <div className="w-16 h-16 rounded-full bg-[#1255d6] text-white flex items-center justify-center shrink-0"><Users size={32} /></div>
-          <div className="mr-auto">
+        <div className="flex flex-wrap items-center gap-4">
+          <div className="w-16 h-16 rounded-full bg-[#1255d6] text-white flex items-center justify-center shrink-0">
+            <Users size={32} />
+          </div>
+          <div className="mr-auto min-w-0 flex-1">
             <h1 className="text-2xl font-extrabold text-[#0b3aa8]">Gestion des personnels</h1>
             <p className="text-sm text-[#3e5788]">Gérez tous les personnels, leurs rôles et accès à la plateforme</p>
           </div>
-          <button onClick={onAdd} className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-5 py-3 rounded-lg shadow">
+          <button
+            type="button"
+            onClick={onAdd}
+            className="inline-flex w-auto shrink-0 items-center justify-center gap-2 whitespace-nowrap bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-5 py-3 rounded-lg shadow"
+          >
             <Plus size={18} /> Ajouter un personnel
           </button>
         </div>
@@ -307,14 +313,14 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
             <ArrowRight size={13} />
             <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="bg-transparent outline-none" />
           </div>
-          <button onClick={onFilter} className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-6 py-2.5 rounded-lg"><Filter size={15} /> Filtrer</button>
+          <button type="button" onClick={onFilter} className="inline-flex w-auto shrink-0 items-center gap-2 whitespace-nowrap bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-6 py-2.5 rounded-lg"><Filter size={15} /> Filtrer</button>
         </div>
 
         {/* Liste */}
         <div className="bg-white rounded-xl border border-[#dbe5f5] p-5 shadow-sm">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold flex items-center gap-2"><Users size={18} className="text-[#1255d6]" /> Liste des personnels ({filtered.length})</h3>
-            <button onClick={exportCsv} className="flex items-center gap-2 border border-[#cfdcf3] text-[#1255d6] text-xs font-semibold px-4 py-2 rounded-lg hover:bg-blue-50"><Download size={14} /> Exporter</button>
+            <button type="button" onClick={exportCsv} className="inline-flex w-auto items-center gap-2 whitespace-nowrap border border-[#cfdcf3] text-[#1255d6] text-xs font-semibold px-4 py-2 rounded-lg hover:bg-blue-50"><Download size={14} /> Exporter</button>
           </div>
           <div className="overflow-x-auto">
             <table className="min-w-full text-xs">
@@ -343,9 +349,9 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
                     <td className="px-3 py-3">{p.hire ? fmt(p.hire) : "—"}</td>
                     <td className="px-3 py-3">
                       <span className="flex items-center gap-2">
-                        <button onClick={() => (onView ? onView(p.raw) : setDetail(p))} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Voir"><Eye size={15} /></button>
-                        <button onClick={() => onEdit?.(p.raw)} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Modifier"><Pencil size={15} /></button>
-                        <button onClick={() => remove(p)} className="w-8 h-8 rounded-md bg-[#ffe3e3] text-[#e5342f] flex items-center justify-center" title="Supprimer"><Trash2 size={15} /></button>
+                        <button type="button" onClick={() => (onView ? onView(p.raw) : setDetail(p))} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Voir"><Eye size={15} /></button>
+                        <button type="button" onClick={() => onEdit?.(p.raw)} className="w-8 h-8 rounded-md bg-[#e3eeff] text-[#1255d6] flex items-center justify-center" title="Modifier"><Pencil size={15} /></button>
+                        <button type="button" onClick={() => remove(p)} className="w-8 h-8 rounded-md bg-[#ffe3e3] text-[#e5342f] flex items-center justify-center" title="Supprimer"><Trash2 size={15} /></button>
                       </span>
                     </td>
                   </tr>
@@ -356,9 +362,9 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
           <div className="flex items-center justify-between mt-4 text-xs text-gray-600">
             <span>Affichage de {filtered.length === 0 ? 0 : start + 1} à {Math.min(start + PAGE, filtered.length)} sur {filtered.length} personnels</span>
             <div className="flex gap-1.5">
-              <button disabled={current === 1} onClick={() => setPage(current - 1)} className="w-9 h-9 border rounded-md bg-white flex items-center justify-center disabled:opacity-40"><ChevronLeft size={15} /></button>
-              {pages.map((p) => <button key={p} onClick={() => setPage(p)} className={`w-9 h-9 border rounded-md ${p === current ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-white"}`}>{p}</button>)}
-              <button disabled={current === pageCount} onClick={() => setPage(current + 1)} className="w-9 h-9 border rounded-md bg-white flex items-center justify-center disabled:opacity-40"><ChevronRight size={15} /></button>
+              <button type="button" disabled={current === 1} onClick={() => setPage(current - 1)} className="w-9 h-9 border rounded-md bg-white flex items-center justify-center disabled:opacity-40"><ChevronLeft size={15} /></button>
+              {pages.map((p) => <button type="button" key={p} onClick={() => setPage(p)} className={`w-9 h-9 border rounded-md ${p === current ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-white"}`}>{p}</button>)}
+              <button type="button" disabled={current === pageCount} onClick={() => setPage(current + 1)} className="w-9 h-9 border rounded-md bg-white flex items-center justify-center disabled:opacity-40"><ChevronRight size={15} /></button>
             </div>
           </div>
         </div>
@@ -367,7 +373,7 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
       {detail && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetail(null)}>
           <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-center justify-between mb-3"><h3 className="font-bold">{detail.name}</h3><button onClick={() => setDetail(null)}><X size={18} /></button></div>
+            <div className="flex items-center justify-between mb-3"><h3 className="font-bold">{detail.name}</h3><button type="button" onClick={() => setDetail(null)}><X size={18} /></button></div>
             <dl className="text-sm space-y-2">
               {[["Email", detail.email], ["Téléphone", detail.phone], ["Rôle", detail.role], ["Statut", detail.status ? stLabel[detail.status] : "—"], ["Date d'embauche", detail.hire ? fmt(detail.hire) : "—"]].map(([k, v]) => (
                 <div key={k} className="flex justify-between border-b pb-1"><dt className="text-gray-500">{k}</dt><dd className="font-medium">{v}</dd></div>
