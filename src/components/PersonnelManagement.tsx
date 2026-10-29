@@ -57,7 +57,7 @@ const stOf = (s: any): St => {
 const stBadge: Record<string, string> = { present: "bg-[#d9f5e6] text-[#14894f]", conge: "bg-[#ffe9cc] text-[#d97706]", absent: "bg-[#ffe3e3] text-[#d02925]" };
 const stLabel: Record<string, string> = { present: "Actif", conge: "Congé", absent: "Absent" };
 
-const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCreate }) => {
+const PersonnelManagement: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCreate }) => {
   const allUser = useSelector((state: RootState) => state.users.allUser) as any[];
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
 
@@ -90,10 +90,10 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCreate }) => 
     try {
       if (onCreate) await onCreate(form);
       else {
-        const token = localStorage.getItem("token");
         const res = await fetch(ADD_ENDPOINT, {
           method: "POST",
-          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          credentials: "include", // cookie de session (comme axios withCredentials)
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify(form),
         });
         if (!res.ok) throw new Error(`Erreur ${res.status}`);
@@ -467,4 +467,4 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCreate }) => 
   );
 };
 
-export default Personnel;
+export default PersonnelManagement;
