@@ -9,17 +9,31 @@ import {
 } from "lucide-react";
 import { loginUser, registerUser } from "../data/service";
 
-/* ------------------------------------------------------------------
-   IMAGES (facultatives) : placez vos photos dans le dossier  public/images/
-     - login-bg.jpg         fond de la page de connexion (mer, bateau, montagne, SANS texte)
-     - register-banner.jpg  bandeau du haut de la page d'inscription (SANS texte)
-     - aina.jpg             portrait de l'assistante « Aina »
-   Si une image est absente, un dégradé bleu maritime s'affiche à la place.
-------------------------------------------------------------------- */
+/* =====================================================================
+   PHOTOS DES PAGES CONNEXION / INSCRIPTION
+   ---------------------------------------------------------------------
+   Placez vos photos dans le dossier :  public/images/
+   Puis, si besoin, changez uniquement les noms de fichiers ci-dessous
+   (par exemple "login-bg.png" si votre photo est un PNG).
+
+     LOGIN_PHOTO     -> fond de la page de CONNEXION (mer, bateau, montagne)
+     REGISTER_PHOTO  -> bandeau du haut de la page d'INSCRIPTION (bateau sur la mer)
+     AINA_PHOTO      -> portrait de l'assistante « Aina » (page d'INSCRIPTION, à droite)
+
+   Les photos doivent être SANS texte (le logo et les slogans sont dans le code).
+   Si un fichier est absent, un dégradé bleu maritime s'affiche à la place.
+===================================================================== */
+const LOGIN_PHOTO = "login-bg.jpg";
+const REGISTER_PHOTO = "register-banner.jpg";
+const AINA_PHOTO = "aina.jpg";
+
+const BASE = (import.meta.env.BASE_URL as string | undefined) ?? "/";
+const photoUrl = (file: string) => `url(${BASE}images/${file})`;
+
 const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
-const LOGIN_BG = `url(/images/login-bg.jpg), ${SEA}`;
-const BANNER_BG = `url(/images/register-banner.jpg), ${SEA}`;
-const AINA_BG = "url(/images/aina.jpg), linear-gradient(160deg,#6fb4f2 0%,#2f86dd 100%)";
+const LOGIN_BG = `${photoUrl(LOGIN_PHOTO)}, ${SEA}`;
+const BANNER_BG = `${photoUrl(REGISTER_PHOTO)}, ${SEA}`;
+const AINA_BG = `${photoUrl(AINA_PHOTO)}, linear-gradient(160deg,#6fb4f2 0%,#2f86dd 100%)`;
 
 const RULES: Array<[string, (p: string) => boolean]> = [
   ["Au moins 8 caractères", (p) => p.length >= 8],
@@ -195,7 +209,7 @@ const AuthPage = () => {
   if (isRegistering) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-[#eaf4ff] to-[#d9eafc] flex flex-col">
-        {/* Bandeau du haut */}
+        {/* Bandeau du haut (photo : REGISTER_PHOTO) */}
         <div className="relative h-[230px] md:h-[260px] overflow-hidden" style={{ backgroundImage: BANNER_BG, backgroundSize: "cover", backgroundPosition: "center" }}>
           <div className="absolute inset-0 bg-gradient-to-b from-[#0d4aa8]/40 to-transparent" />
           <div className="relative max-w-6xl mx-auto px-6 pt-8 flex items-start justify-between gap-4">
@@ -259,6 +273,7 @@ const AuthPage = () => {
 
           {/* Colonne droite */}
           <div className="space-y-4">
+            {/* Portrait d'Aina (photo : AINA_PHOTO) */}
             <div className="relative h-[260px] rounded-2xl overflow-hidden shadow-lg" style={{ backgroundImage: AINA_BG, backgroundSize: "cover", backgroundPosition: "center top" }}>
               <div className="absolute right-4 top-6 max-w-[55%] text-white text-xl -rotate-6 drop-shadow-md" style={script}>
                 Je suis Aina, votre assistant IA. Je suis là pour vous aider !
