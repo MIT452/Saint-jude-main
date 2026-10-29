@@ -1,18 +1,26 @@
-import { FC, FormEvent, useEffect, useRef, useState } from 'react';
+import { FC, FormEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { useSelector } from 'react-redux';
 import { Bot, Send, Loader2, Lightbulb } from 'lucide-react';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Card, CardContent } from './ui/card';
+import { RootState } from '../redux';
 
 // URL du backend Render (jamais localhost en production).
 // Vercel → Settings → Environment Variables : VITE_API_URL=https://votre-backend.onrender.com
-const API_URL = ((import.meta.env.VITE_API_URL as string | undefined) ?? '').replace(/\/$/, '');
+// Que la valeur finisse par "/" ou par "/api", on la normalise pour éviter "/api/api/...".
+const API_URL = ((import.meta.env.VITE_API_URL as string | undefined) ?? '')
+  .replace(/\/+$/, '')
+  .replace(/\/api$/, '');
 
 // Jeton d'authentification : adaptez cette fonction si votre application le stocke ailleurs.
-// Si vous utilisez un cookie de session, le `credentials: 'include'` ci-dessous suffit.
 const getToken = (): string | null => {
   try {
-    return localStorage.getItem('token');
+    for (const key of ['token', 'accessToken', 'access_token', 'jwt']) {
+      const v = localStorage.getItem(key);
+      if (v) return v.replace(/^"|"$/g, '');
+    }
+    return null;
   } catch {
     return null;
   }
@@ -25,7 +33,7 @@ interface Props {
   /**
    * 'cash'  = page Gestion de caisse      → /api/ai/finance/chat
    * 'fuel'  = page Consommation carburant → /api/ai/finance/chat
-   * 'boats' = page Gestion des bateaux    → /api/ai/chat (réponses lues dans la table des bateaux)
+   * 'boats' = page Gestion des bateaux    → /api/ai/chat
    */
   scope: 'cash' | 'fuel' | 'boats';
 }
@@ -55,6 +63,22 @@ const AiFinanceChat: FC<Props> = ({ scope }) => {
   const [period, setPeriod] = useState<Period | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
 
+  const cashMovements = useSelector((state: RootState) => state.stJude?.cashMouvement);
+
+  // Mouvements de caisse envoyés au backend (compacts, du plus récent au plus ancien).
+  const cashContext = useMemo(() => {
+    if (scope !== 'cash' || !Array.isArray(cashMovements)) return undefined;
+    return [...cashMovements]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 300)
+      .map((t) => ({
+        date: t.date,
+        designation: t.designation,
+        credit: Number(t.credit || 0),
+        debit: Number(t.debit || 0),
+      }));
+  }, [cashMovements, scope]);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [messages, loading]);
@@ -76,12 +100,17 @@ const AiFinanceChat: FC<Props> = ({ scope }) => {
       const endpoint = scope === 'boats' ? '/api/ai/chat' : '/api/ai/finance/chat';
       const res = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
-        credentials: 'include',
+        // Pas de `credentials: 'include'` : l'authentification passe par le header Bearer,
+        // et 'include' casse CORS si le backend autorise l'origine avec "*".
         headers: {
           'Content-Type': 'application/json',
           ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify(scope === 'boats' ? { question: q } : { question: q, scope, history, period }),
+        body: JSON.stringify(
+          scope === 'boats'
+            ? { question: q, scope }
+            : { question: q, scope, history, period, context: cashContext ? { movements: cashContext } : undefined },
+        ),
         signal: controller.signal,
       });
 
@@ -93,9 +122,11 @@ const AiFinanceChat: FC<Props> = ({ scope }) => {
             ? 'Votre session a expiré. Reconnectez-vous puis réessayez.'
             : res.status === 403
               ? data?.error ?? 'Vous n’avez pas accès à cet assistant.'
-              : res.status === 429
-                ? 'Trop de questions en peu de temps. Réessayez dans une minute.'
-                : data?.error ?? 'Le serveur n’a pas pu répondre. Réessayez dans un instant.';
+              : res.status === 404
+                ? 'Service IA introuvable sur le serveur (404). Le backend doit être redéployé.'
+                : res.status === 429
+                  ? 'Trop de questions en peu de temps. Réessayez dans une minute.'
+                  : data?.error ?? 'Le serveur n’a pas pu répondre. Réessayez dans un instant.';
         setMessages((m) => [...m, { role: 'assistant', content: msg, error: true }]);
         return;
       }
