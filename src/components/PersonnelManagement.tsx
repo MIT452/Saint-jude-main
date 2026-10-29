@@ -13,7 +13,24 @@ interface Props {
   onView?: (user: any) => void;
   onEdit?: (user: any) => void;
   onDelete?: (user: any) => void;
+  /** Optionnel : si fourni, reçoit les données du formulaire d'ajout (sinon POST vers ADD_ENDPOINT) */
+  onCreate?: (data: NewUser) => Promise<void> | void;
 }
+
+interface NewUser {
+  name: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  role: string;
+  password: string;
+}
+
+// À ADAPTER si ton API est différente
+const API_URL = (import.meta as any).env?.VITE_API_URL ?? "";
+const ADD_ENDPOINT = `${API_URL}/api/users`;
+const ROLE_OPTIONS = ["Capitaine", "Gestionnaire", "Agent"];
+const EMPTY_FORM: NewUser = { name: "", lastName: "", email: "", phone: "", role: "Agent", password: "" };
 
 const PAGE = 5;
 const DAY = 86400000;
@@ -40,7 +57,7 @@ const stOf = (s: any): St => {
 const stBadge: Record<string, string> = { present: "bg-[#d9f5e6] text-[#14894f]", conge: "bg-[#ffe9cc] text-[#d97706]", absent: "bg-[#ffe3e3] text-[#d02925]" };
 const stLabel: Record<string, string> = { present: "Actif", conge: "Congé", absent: "Absent" };
 
-const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
+const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete, onCreate }) => {
   const allUser = useSelector((state: RootState) => state.users.allUser) as any[];
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
 
@@ -53,6 +70,42 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<string[]>([]);
   const [detail, setDetail] = useState<any | null>(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [form, setForm] = useState<NewUser>(EMPTY_FORM);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  const handleAdd = () => {
+    if (onAdd) onAdd();
+    else { setForm(EMPTY_FORM); setFormError(""); setShowAdd(true); }
+  };
+
+  const submitAdd = async () => {
+    if (!form.name.trim() || !form.email.trim() || !form.password.trim()) {
+      setFormError("Nom, email et mot de passe sont obligatoires.");
+      return;
+    }
+    setSaving(true);
+    setFormError("");
+    try {
+      if (onCreate) await onCreate(form);
+      else {
+        const token = localStorage.getItem("token");
+        const res = await fetch(ADD_ENDPOINT, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+          body: JSON.stringify(form),
+        });
+        if (!res.ok) throw new Error(`Erreur ${res.status}`);
+      }
+      setShowAdd(false);
+      window.location.reload();
+    } catch (e: any) {
+      setFormError(e?.message ?? "Échec de l'ajout.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   // ---------- Normalisation des vrais utilisateurs
   const people = useMemo(
@@ -204,7 +257,7 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
           </div>
           <button
             type="button"
-            onClick={onAdd}
+            onClick={handleAdd}
             className="inline-flex w-auto shrink-0 items-center justify-center gap-2 whitespace-nowrap bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold px-5 py-3 rounded-lg shadow"
           >
             <Plus size={18} /> Ajouter un personnel
@@ -369,6 +422,34 @@ const Personnel: FC<Props> = ({ onAdd, onView, onEdit, onDelete }) => {
           </div>
         </div>
       </div>
+
+      {showAdd && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => !saving && setShowAdd(false)}>
+          <div className="bg-white rounded-xl max-w-md w-full p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold">Ajouter un personnel</h3>
+              <button type="button" onClick={() => setShowAdd(false)}><X size={18} /></button>
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <input placeholder="Prénom *" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="border rounded-lg px-3 py-2.5" />
+              <input placeholder="Nom" value={form.lastName} onChange={(e) => setForm({ ...form, lastName: e.target.value })} className="border rounded-lg px-3 py-2.5" />
+              <input placeholder="Email *" type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} className="border rounded-lg px-3 py-2.5 col-span-2" />
+              <input placeholder="Téléphone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} className="border rounded-lg px-3 py-2.5" />
+              <select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })} className="border rounded-lg px-3 py-2.5">
+                {ROLE_OPTIONS.map((r) => <option key={r}>{r}</option>)}
+              </select>
+              <input placeholder="Mot de passe *" type="password" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} className="border rounded-lg px-3 py-2.5 col-span-2" />
+            </div>
+            {formError && <p className="text-xs text-red-600 mt-3">{formError}</p>}
+            <div className="flex justify-end gap-2 mt-4">
+              <button type="button" disabled={saving} onClick={() => setShowAdd(false)} className="border rounded-lg px-4 py-2 text-xs font-semibold">Annuler</button>
+              <button type="button" disabled={saving} onClick={submitAdd} className="bg-[#1255d6] hover:bg-[#0e45b3] text-white rounded-lg px-5 py-2 text-xs font-semibold disabled:opacity-60">
+                {saving ? "Enregistrement..." : "Enregistrer"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {detail && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setDetail(null)}>
