@@ -1,7 +1,7 @@
-import { FC, useEffect, useMemo, useState } from "react";
+import { FC, useCallback, useEffect, useMemo, useState } from "react";
 import {
   Search, Calendar, ShieldCheck, ShieldAlert, AlertTriangle, Bell, ChevronDown, ArrowUp, ArrowDown, ArrowRight, Bot, Brain,
-  Settings2, Trash2, Pencil, CalendarCheck, Cog, MoreHorizontal, Box, UserCircle2, FileText, X, Clock,
+  Settings2, Trash2, Pencil, CalendarCheck, Cog, MoreHorizontal, Box, UserCircle2, FileText, X, Clock, LogIn,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
@@ -12,7 +12,9 @@ import { RootState } from "../redux";
 import { onGetService } from "../data/service";
 import { AuditLog } from "../data/type";
 import { findUser } from "../Tools/Tools";
-import { askAI, askAIJson } from "../data/auditAI";
+import { askAI } from "../data/auditAI";
+import { fetchAuditAlerts, fetchAuditLogs, reviewAuditAlert, verifyAuditChain } from "../data/auditApi";
+import type { ChainState, ServerAlert, ServerLog } from "../data/auditApi";
 import AuditModal from "./AuditModal";
 
 type types = "Goods" | "User" | "Reservation" | "Trip" | "Boat" | "CashMovement" | "FuelConsumption";
@@ -22,16 +24,34 @@ type Row = {
   log: AuditLog; date: Date; user: string; userId: string; entity: string; entityFr: string; act: string; actKey: string;
   ok: boolean; risk: Risk; ip: string; details: string; docId?: string;
 };
-type Anomaly = { t: string; s: string; h: string; lvl: Level };
+type AlertItem = { id: string; t: string; s: string; h: string; lvl: Level };
 
 const PAGE = 8;
 const DAY = 86400000;
 const PIE_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#94a3b8"];
 const pad = (n: number) => String(n).padStart(2, "0");
 const fmtDate = (d: Date) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-const ACTION: Record<string, string> = { create: "CRÉATION", update: "MODIFICATION", delete: "SUPPRESSION" };
+const ACTION: Record<string, string> = {
+  create: "CRÉATION", update: "MODIFICATION", delete: "SUPPRESSION", login: "CONNEXION", login_failed: "ÉCHEC DE CONNEXION",
+};
 const ENTITY_FR: Record<string, string> = {
-  Goods: "marchandise", User: "utilisateur", Reservation: "réservation", Trip: "trajet", Boat: "bateau", CashMovement: "caisse", FuelConsumption: "carburant",
+  Goods: "marchandise", User: "utilisateur", Reservation: "réservation", Trip: "trajet", Boat: "bateau", CashMovement: "caisse",
+  FuelConsumption: "carburant", Auth: "connexion",
+};
+const MODAL_ENTITIES = ["Goods", "User", "Reservation", "Trip", "Boat", "CashMovement", "FuelConsumption"];
+
+// Nom de table du backend -> clé d'entité utilisée par la page
+const RESOURCE_TO_ENTITY: Record<string, string> = {
+  goods: "Goods", user: "User", reservations: "Reservation", "reservations-ai": "Reservation", trips: "Trip",
+  boats: "Boat", cashmovements: "CashMovement", fuelconsumptions: "FuelConsumption", auth: "Auth",
+};
+
+// Règles de détection déterministes (côté backend)
+const RULE_LABEL: Record<string, string> = {
+  BRUTE_FORCE: "Tentatives de connexion répétées (force brute)",
+  LOGIN_FAILED_REPEAT: "Échecs de connexion répétés",
+  CASH_MODIFIED: "Mouvement de caisse modifié",
+  OFF_HOURS: "Activité hors horaires (22h–5h)",
 };
 
 const riskStyle: Record<Risk, string> = {
@@ -50,6 +70,8 @@ const actStyle = (k: string): { color: string; bg: string; Icon: LucideIcon } =>
   if (k === "delete") return { color: "text-[#e5342f]", bg: "bg-[#e5342f]", Icon: Trash2 };
   if (k === "update") return { color: "text-[#10b981]", bg: "bg-[#10b981]", Icon: Pencil };
   if (k === "create") return { color: "text-[#8b5cf6]", bg: "bg-[#8b5cf6]", Icon: CalendarCheck };
+  if (k === "login") return { color: "text-[#1255d6]", bg: "bg-[#1255d6]", Icon: LogIn };
+  if (k === "login_failed") return { color: "text-[#e5342f]", bg: "bg-[#e5342f]", Icon: ShieldAlert };
   return { color: "text-gray-500", bg: "bg-gray-400", Icon: Cog };
 };
 
@@ -59,36 +81,50 @@ const ago = (d: Date) => {
   const h = Math.round(m / 60);
   return h < 24 ? `Il y a ${h} h` : `Il y a ${Math.round(h / 24)} j`;
 };
-const toLevel = (v: any): Level => (v === "Élevé" || v === "Moyen" || v === "Faible" ? v : "Moyen");
 const trend = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
 
-// ---------- Analyse locale (repli si l'IA est indisponible), calculée sur les vrais logs
-const localAnomalies = (rows: Row[]): Anomaly[] => {
-  const out: Anomaly[] = [];
-  const failed = rows.filter((r) => !r.ok);
-  if (failed.length) out.push({ t: "Échecs d'opération détectés", s: `${failed.length} échec(s) — dernier par ${failed[0].user} (IP : ${failed[0].ip})`, h: ago(failed[0].date), lvl: "Élevé" });
-  const dels = rows.filter((r) => r.actKey === "delete");
-  const byUser = new Map<string, number[]>();
-  dels.forEach((r) => byUser.set(r.user, [...(byUser.get(r.user) ?? []), r.date.getTime()]));
-  let burst = "";
-  byUser.forEach((ts, u) => {
-    const s = [...ts].sort((a, b) => a - b);
-    for (let i = 2; i < s.length; i++) if (s[i] - s[i - 2] <= 600000) burst = u;
-  });
-  if (burst) out.push({ t: "Comportement inhabituel détecté", s: `${burst} : 3 suppressions ou plus en moins de 10 minutes`, h: ago(dels[0].date), lvl: "Élevé" });
-  else if (dels.length) out.push({ t: "Suppressions à vérifier", s: `${dels.length} suppression(s) — dernière par ${dels[0].user} sur ${dels[0].entityFr}`, h: ago(dels[0].date), lvl: "Moyen" });
-  const night = rows.filter((r) => Date.now() - r.date.getTime() < DAY && r.date.getHours() < 6);
-  if (night.length) out.push({ t: "Activité nocturne", s: `${night.length} action(s) entre 00h et 06h sur les dernières 24h`, h: ago(night[0].date), lvl: "Moyen" });
-  return out.slice(0, 3);
+// Texte lisible pour une entrée du journal sécurisé
+const describe = (l: ServerLog): string => {
+  const d = l.details;
+  if (l.action === "LOGIN") return "Connexion réussie";
+  if (l.action === "LOGIN_FAILED") return `Échec de connexion${d?.email ? ` (${d.email})` : ""}`;
+  if (d?.event === "register") return "Inscription d'un nouvel utilisateur";
+  if (d?.event === "change-password") return "Changement de mot de passe";
+  const label = ACTION[l.action.toLowerCase()] ?? l.action;
+  const name = ENTITY_FR[RESOURCE_TO_ENTITY[l.resource] ?? l.resource] ?? l.resource;
+  const http = d?.httpStatus ? ` (HTTP ${d.httpStatus})` : "";
+  return `${label.charAt(0) + label.slice(1).toLowerCase()} — ${name}${http}`;
 };
 
-const buildContext = (rows: Row[]) => {
+// Convertit une entrée du journal sécurisé au format attendu par la page
+const toAuditLog = (l: ServerLog): AuditLog =>
+  ({
+    _id: String(l.id),
+    createdAt: l.created_at,
+    userId: l.user_id ?? "",
+    collectionName: RESOURCE_TO_ENTITY[l.resource] ?? l.resource,
+    action: l.action.toLowerCase(),
+    documentId: l.resource_id ?? "",
+    status: l.result === "FAILURE" ? "FAILED" : "SUCCESS",
+    ip: l.ip_address ?? "—",
+    details: describe(l),
+    serverStatus: l.status,
+    actor: l.details?.email,
+    after: l.resource_id ? { id: l.resource_id } : undefined,
+  }) as unknown as AuditLog;
+
+// Contexte envoyé à l'IA : elle résume, elle ne décide pas
+const buildContext = (rows: Row[], alerts: AlertItem[]) => {
   const lines = rows.slice(0, 40).map((r) => `${r.date.toISOString().slice(0, 16)} | ${r.user} | ${r.act} | ${r.entityFr} | ${r.ok ? "Succès" : "Échec"} | IP ${r.ip}`);
-  return `Journaux d'audit SAINT-JUDE (transport maritime). Total: ${rows.length}, échecs: ${rows.filter((r) => !r.ok).length}, suppressions: ${rows.filter((r) => r.actKey === "delete").length}.\nDerniers événements (date | utilisateur | action | ressource | résultat | IP):\n${lines.join("\n")}`;
+  const alertLines = alerts.slice(0, 10).map((a) => `${a.t} (${a.lvl})`).join("; ") || "aucune";
+  return `Journaux d'audit SAINT-JUDE (transport maritime). Total: ${rows.length}, échecs: ${rows.filter((r) => !r.ok).length}, suppressions: ${rows.filter((r) => r.actKey === "delete").length}.\nAlertes levées par les règles de détection (${alerts.length}): ${alertLines}\nDerniers événements (date | utilisateur | action | ressource | résultat | IP):\n${lines.join("\n")}`;
 };
 
 const Audit: FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [alerts, setAlerts] = useState<ServerAlert[]>([]);
+  const [chain, setChain] = useState<ChainState | null | undefined>(undefined);
+  const [source, setSource] = useState<"server" | "legacy">("server");
   const [loading, setLoading] = useState(true);
   const [modal, setModal] = useState<{ id: string; type: types } | null>(null);
   const [page, setPage] = useState(1);
@@ -102,8 +138,6 @@ const Audit: FC = () => {
   const [to, setTo] = useState("");
   const [applied, setApplied] = useState({ search: "", user: "", act: "", res: "", stat: "", from: "", to: "" });
 
-  const [aiAnom, setAiAnom] = useState<Anomaly[] | null>(null);
-  const [aiState, setAiState] = useState<"idle" | "busy" | "ok" | "off">("idle");
   const [refresh, setRefresh] = useState(0);
   const [showParams, setShowParams] = useState(false);
   const [report, setReport] = useState<string | null>(null);
@@ -113,17 +147,35 @@ const Audit: FC = () => {
   const allUser = useSelector((state: RootState) => state.users.allUser);
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
 
-  useEffect(() => {
-    (async () => {
+  const load = useCallback(async () => {
+    try {
+      const [serverLogs, serverAlerts, chainState] = await Promise.all([
+        fetchAuditLogs(500),
+        fetchAuditAlerts(false),
+        verifyAuditChain().catch(() => null),
+      ]);
+      setLogs(serverLogs.map(toAuditLog));
+      setAlerts(serverAlerts);
+      setChain(chainState);
+      setSource("server");
+    } catch (e) {
+      console.error("Journal d'audit sécurisé indisponible, repli sur l'ancien journal", e);
       try {
         setLogs(await onGetService<AuditLog>("allaudit"));
-      } catch (e) {
-        console.error("Erreur logs", e);
-      } finally {
-        setLoading(false);
+        setAlerts([]);
+        setChain(null);
+        setSource("legacy");
+      } catch (e2) {
+        console.error("Erreur logs", e2);
       }
-    })();
+    } finally {
+      setLoading(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load, refresh]);
 
   const rows = useMemo<Row[]>(
     () =>
@@ -136,49 +188,51 @@ const Audit: FC = () => {
           const actKey = String(log.action);
           const act = ACTION[actKey] ?? actKey.toUpperCase();
           const entityFr = ENTITY_FR[entity] ?? entity.toLowerCase();
+          const serverStatus = (log as any).serverStatus as string | undefined;
+          const risk: Risk = serverStatus
+            ? serverStatus === "CRITIQUE" ? "Anomalie" : serverStatus === "SUSPECT" ? "Risque" : "Normal"
+            : !ok ? "Risque" : actKey === "delete" ? "Anomalie" : "Normal";
           return {
-            log, entity, entityFr, act, actKey, ok,
+            log, entity, entityFr, act, actKey, ok, risk,
             date: new Date(log.createdAt),
-            user: u ? `${u.name} ${u.lastName}` : "system",
+            user: u ? `${u.name} ${u.lastName}` : ((log as any).actor ?? "system"),
             userId: String(log.userId),
-            risk: (!ok ? "Risque" : actKey === "delete" ? "Anomalie" : "Normal") as Risk,
             ip: (log as any).ip ?? (log as any).ipAddress ?? "—",
             details: (log as any).details ?? `${act.charAt(0) + act.slice(1).toLowerCase()} — ${entityFr}`,
-            docId: (log as any).after?.id,
+            docId: MODAL_ENTITIES.includes(entity) ? (log as any).after?.id : undefined,
           };
         }),
     [logs, allUser]
   );
 
-  // ---------- Anomalies : IA d'abord, règles locales en repli
-  const signature = rows.length ? `${rows.length}-${rows[0].date.getTime()}` : "";
-  useEffect(() => {
-    if (!rows.length) { setAiAnom(null); setAiState("idle"); return; }
-    let off = false;
-    setAiState("busy");
-    const prompt = `${buildContext(rows)}\n\nTu es l'IA d'audit de sécurité. Détecte au plus 3 anomalies ou comportements suspects dans ces journaux (n'invente rien qui n'y figure pas). Réponds UNIQUEMENT par un tableau JSON: [{"title":"","detail":"","level":"Faible|Moyen|Élevé"}]. Tableau vide [] s'il n'y a rien de suspect.`;
-    askAIJson<{ title: string; detail: string; level: string }[]>(prompt).then((res) => {
-      if (off) return;
-      if (Array.isArray(res)) {
-        setAiAnom(res.slice(0, 3).map((x) => ({ t: x.title, s: x.detail, h: "Analyse IA", lvl: toLevel(x.level) })));
-        setAiState("ok");
-      } else {
-        setAiAnom(null);
-        setAiState("off");
-      }
-    });
-    return () => { off = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [signature, refresh]);
+  // ---------- Alertes : levées par les règles du backend (l'IA ne décide pas)
+  const anomalies = useMemo<AlertItem[]>(
+    () =>
+      alerts.map((a) => ({
+        id: String(a.id),
+        t: RULE_LABEL[a.rule] ?? a.rule,
+        s: `${ENTITY_FR[RESOURCE_TO_ENTITY[a.resource] ?? a.resource] ?? a.resource} · IP ${a.ip_address ?? "—"}`,
+        h: ago(new Date(a.created_at)),
+        lvl: (a.severity === "CRITIQUE" ? "Élevé" : "Moyen") as Level,
+      })),
+    [alerts]
+  );
 
-  const anomalies = aiAnom ?? localAnomalies(rows);
+  const onReview = async (id: string, falsePositive: boolean) => {
+    try {
+      await reviewAuditAlert(id, falsePositive);
+      setAlerts((prev) => prev.filter((a) => String(a.id) !== id));
+    } catch (e) {
+      console.error("Revue de l'alerte impossible", e);
+    }
+  };
 
   // ---------- Statistiques réelles
   const now = Date.now();
   const stats = useMemo(() => {
     const cur = rows.filter((r) => now - r.date.getTime() < 30 * DAY);
     const prev = rows.filter((r) => now - r.date.getTime() >= 30 * DAY && now - r.date.getTime() < 60 * DAY);
-    const sec = (r: Row) => !r.ok || r.actKey === "delete" || r.entity === "User";
+    const sec = (r: Row) => !r.ok || r.risk !== "Normal" || r.actKey === "delete" || r.entity === "User";
     const users = (list: Row[]) => new Set(list.map((r) => r.userId)).size;
     const day = rows.filter((r) => now - r.date.getTime() < DAY);
     return {
@@ -186,7 +240,7 @@ const Audit: FC = () => {
       security: rows.filter(sec).length, securityT: trend(cur.filter(sec).length, prev.filter(sec).length),
       users: users(cur), usersT: trend(users(cur), users(prev)),
       resources: new Set(rows.map((r) => r.entity)).size,
-      critical24: day.filter((r) => !r.ok || r.actKey === "delete").length,
+      critical24: day.filter((r) => !r.ok || r.risk !== "Normal" || r.actKey === "delete").length,
       conf24: day.length ? Math.round((day.filter((r) => r.ok).length / day.length) * 100) : null,
     };
   }, [rows, now]);
@@ -202,7 +256,7 @@ const Audit: FC = () => {
       const t = new Date(r.date); t.setHours(0, 0, 0, 0);
       const day = days.find((x) => x.key === t.getTime());
       if (!day) return;
-      if (!r.ok) day.echecs++; else if (r.actKey === "delete") day.anomalies++; else day.normal++;
+      if (!r.ok) day.echecs++; else if (r.actKey === "delete" || r.risk !== "Normal") day.anomalies++; else day.normal++;
     });
     return days;
   }, [rows]);
@@ -254,12 +308,12 @@ const Audit: FC = () => {
     setApplied({ search: "", user: "", act: "", res: "", stat: "", from: "", to: "" }); setPage(1);
   };
 
-  // ---------- Rapport IA (à la demande)
+  // ---------- Rapport IA (à la demande) : l'IA résume, les règles ont déjà décidé
   const genReport = async () => {
     setShowReport(true);
     setReportBusy(true);
-    const text = await askAI(`${buildContext(rows)}\n\nRédige en français un court rapport d'audit du dernier jour (5 lignes maximum): activité, anomalies, recommandations. Appuie-toi uniquement sur les journaux ci-dessus.`);
-    setReport(text ?? `Rapport calculé localement : ${rows.filter((r) => now - r.date.getTime() < DAY).length} événement(s) sur 24h, ${stats.critical24} critique(s), ${anomalies.length} anomalie(s) détectée(s).${stats.conf24 != null ? ` Conformité : ${stats.conf24}%.` : ""} (IA indisponible)`);
+    const text = await askAI(`${buildContext(rows, anomalies)}\n\nLes alertes ci-dessus ont été levées par des règles déterministes : ne les contredis pas et n'en invente pas. Rédige en français un court rapport d'audit du dernier jour (5 lignes maximum): activité, anomalies, recommandations. Appuie-toi uniquement sur les journaux ci-dessus.`);
+    setReport(text ?? `Rapport calculé localement : ${rows.filter((r) => now - r.date.getTime() < DAY).length} événement(s) sur 24h, ${stats.critical24} critique(s), ${anomalies.length} alerte(s) à examiner.${stats.conf24 != null ? ` Conformité : ${stats.conf24}%.` : ""} (IA indisponible)`);
     setReportBusy(false);
   };
 
@@ -267,14 +321,18 @@ const Audit: FC = () => {
 
   const d = new Date();
   const dateLabel = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
-  const badgeAI = aiState === "busy" ? { t: "Analyse en cours…", c: "bg-[#e0ecff] text-[#1255d6]" }
-    : aiState === "ok" ? { t: "IA activée", c: "bg-[#d9f5e6] text-[#14894f]" }
-    : aiState === "off" ? { t: "IA indisponible", c: "bg-[#fff0d9] text-[#d97706]" } : { t: "En attente de logs", c: "bg-gray-100 text-gray-500" };
+
+  // Badge d'intégrité de la chaîne SHA-256
+  const badgeIntegrity =
+    chain === undefined ? { t: "Vérification…", c: "bg-gray-100 text-gray-500" }
+    : chain === null ? { t: "Intégrité non vérifiée", c: "bg-[#fff0d9] text-[#d97706]" }
+    : chain.ok ? { t: `Journal intègre (${chain.count ?? 0} entrées)`, c: "bg-[#d9f5e6] text-[#14894f]" }
+    : { t: `Chaîne rompue${chain.brokenAtId ? ` (entrée ${chain.brokenAtId})` : ""}`, c: "bg-[#ffe3e3] text-[#d02925]" };
 
   const kpis: { label: string; value: number; t: number | null; icon: LucideIcon; bg: string; lc?: string }[] = [
     { label: "Total des logs", value: stats.total, t: stats.totalT, icon: FileText, bg: "bg-[#1d6fe0]" },
     { label: "Événements de sécurité", value: stats.security, t: stats.securityT, icon: ShieldCheck, bg: "bg-[#12a66a]" },
-    { label: "Anomalies détectées", value: anomalies.length, t: null, icon: AlertTriangle, bg: "bg-[#e5342f]", lc: "text-[#e5342f]" },
+    { label: "Alertes à examiner", value: anomalies.length, t: null, icon: AlertTriangle, bg: "bg-[#e5342f]", lc: "text-[#e5342f]" },
     { label: "Utilisateurs actifs", value: stats.users, t: stats.usersT, icon: UserCircle2, bg: "bg-[#7c3aed]", lc: "text-[#7c3aed]" },
     { label: "Ressources surveillées", value: stats.resources, t: null, icon: Box, bg: "bg-[#f59e0b]", lc: "text-[#f59e0b]" },
   ];
@@ -287,7 +345,7 @@ const Audit: FC = () => {
         <div className="mr-auto">
           <h1 className="text-2xl font-extrabold flex items-center gap-3">
             Audit Logs — SAINT-AI
-            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${badgeAI.c}`}>● {badgeAI.t}</span>
+            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${badgeIntegrity.c}`}>● {badgeIntegrity.t}</span>
           </h1>
           <p className="text-sm text-[#3e5788]">Traçabilité · Détection d'anomalies · Sécurité · Assistant intelligent</p>
         </div>
@@ -385,7 +443,7 @@ const Audit: FC = () => {
               <li key={String(r.log._id)} className="flex items-start gap-2 text-xs border-b last:border-0 pb-2">
                 <span className={`mt-1 w-2 h-2 rounded-full ${r.risk === "Anomalie" ? "bg-[#e5342f]" : "bg-[#f59e0b]"}`} />
                 <div className="flex-1">
-                  <p className="font-semibold">{r.act.charAt(0) + r.act.slice(1).toLowerCase()} de {r.entityFr}</p>
+                  <p className="font-semibold">{r.act.charAt(0) + r.act.slice(1).toLowerCase()} — {r.entityFr}</p>
                   <p className="text-gray-500">{r.user} - {fmtDate(r.date)}</p>
                 </div>
                 <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${riskStyle[r.risk]}`}>{r.risk}</span>
@@ -399,23 +457,24 @@ const Audit: FC = () => {
             <div className="w-11 h-11 rounded-xl bg-[#1d4fb8] text-white flex items-center justify-center"><Bot size={26} /></div>
             <div className="flex-1">
               <h3 className="font-bold text-sm">SAINT-AI Audit Intelligence</h3>
-              <p className="text-[10px] text-gray-500">Analyse des journaux et détection d'anomalies</p>
+              <p className="text-[10px] text-gray-500">Règles de détection + résumé par IA</p>
             </div>
-            <span className={`text-[10px] px-2 py-0.5 rounded-full ${aiState === "ok" ? "bg-[#d9f5e6] text-[#14894f]" : "bg-gray-100 text-gray-500"}`}>● {aiState === "ok" ? "En ligne" : "Local"}</span>
+            <span className={`text-[10px] px-2 py-0.5 rounded-full ${source === "server" ? "bg-[#d9f5e6] text-[#14894f]" : "bg-gray-100 text-gray-500"}`}>● {source === "server" ? "Règles actives" : "Ancien journal"}</span>
           </div>
           <div className="mt-3 bg-[#eef4ff] rounded-lg p-3 text-[11px]">
-            <p className="font-bold text-xs">{anomalies.length ? `${anomalies.length} anomalie(s) détectée(s)` : "Aucune anomalie détectée"}</p>
-            {anomalies.slice(0, 2).map((a, i) => <p key={i} className="text-gray-700">{a.t}</p>)}
+            <p className="font-bold text-xs">{anomalies.length ? `${anomalies.length} alerte(s) à examiner` : "Aucune alerte à examiner"}</p>
+            {anomalies.slice(0, 2).map((a) => <p key={a.id} className="text-gray-700">{a.t}</p>)}
           </div>
           <div className="grid grid-cols-[1.3fr_1fr] gap-2 mt-3">
             <button onClick={genReport} className="bg-[#1255d6] text-white text-xs font-semibold py-2 rounded-md flex items-center justify-center gap-1"><Brain size={14} /> Voir le rapport IA</button>
-            <button onClick={() => setShowParams((v) => !v)} className="border border-[#cfdcf3] text-xs py-2 rounded-md flex items-center justify-center gap-1"><Settings2 size={14} /> Paramètres IA</button>
+            <button onClick={() => setShowParams((v) => !v)} className="border border-[#cfdcf3] text-xs py-2 rounded-md flex items-center justify-center gap-1"><Settings2 size={14} /> Paramètres</button>
           </div>
           {showParams && (
-            <div className="absolute right-3 top-full mt-1 z-20 w-64 bg-white border border-[#cfdcf3] rounded-lg shadow-lg p-3 text-[11px] space-y-2">
-              <p><b>Source :</b> {aiState === "ok" ? "IA du backend" : "calcul local sur vos logs"}</p>
-              <p><b>Logs analysés :</b> {Math.min(rows.length, 40)} derniers</p>
-              <button onClick={() => { setRefresh((n) => n + 1); setShowParams(false); }} className="w-full bg-[#1255d6] text-white rounded-md py-1.5 font-semibold">Relancer l'analyse</button>
+            <div className="absolute right-3 top-full mt-1 z-20 w-72 bg-white border border-[#cfdcf3] rounded-lg shadow-lg p-3 text-[11px] space-y-2">
+              <p><b>Source :</b> {source === "server" ? "journal d'audit sécurisé (chaîne SHA-256)" : "ancien journal"}</p>
+              <p><b>Règles :</b> 5 échecs de connexion en 10 min (critique), 3 échecs (suspect), modification de caisse, activité entre 22h et 5h.</p>
+              <p><b>Entrées chargées :</b> {rows.length}</p>
+              <button onClick={() => { setRefresh((n) => n + 1); setShowParams(false); }} className="w-full bg-[#1255d6] text-white rounded-md py-1.5 font-semibold">Actualiser</button>
             </div>
           )}
         </div>
@@ -463,7 +522,7 @@ const Audit: FC = () => {
                           <span className={`font-semibold ${st.color}`}>{r.act}</span>
                         </span>
                       </td>
-                      <td className="px-3 py-2.5">{r.entityFr} (ID: {r.log.documentId})</td>
+                      <td className="px-3 py-2.5">{r.entityFr}{r.log.documentId ? ` (ID: ${r.log.documentId})` : ""}</td>
                       <td className="px-3 py-2.5 max-w-[240px] truncate">{r.details}</td>
                       <td className="px-3 py-2.5">{r.ip}</td>
                       <td className={`px-3 py-2.5 font-medium ${r.ok ? "text-[#14894f]" : "text-[#e5342f]"}`}>{r.ok ? "Succès" : "Échec"}</td>
@@ -489,17 +548,25 @@ const Audit: FC = () => {
 
         <div className="space-y-3">
           <div className="bg-white rounded-xl border border-[#dbe5f5] p-4 shadow-sm">
-            <h3 className="font-bold text-sm flex items-center gap-2 mb-2"><Brain size={16} className="text-[#1255d6]" /> Aperçu des anomalies par IA</h3>
-            <ul className="space-y-2.5">
-              {anomalies.length === 0 && <li className="text-xs text-gray-500">{rows.length ? "Aucune anomalie détectée." : "Aucun événement à analyser."}</li>}
-              {anomalies.map((a, i) => (
-                <li key={i} className="flex gap-2 text-[11px] items-start">
+            <h3 className="font-bold text-sm flex items-center gap-2 mb-2"><ShieldAlert size={16} className="text-[#1255d6]" /> Alertes de détection</h3>
+            <ul className="space-y-3">
+              {anomalies.length === 0 && <li className="text-xs text-gray-500">{rows.length ? "Aucune alerte à examiner." : "Aucun événement à analyser."}</li>}
+              {anomalies.slice(0, 5).map((a) => (
+                <li key={a.id} className="flex gap-2 text-[11px] items-start">
                   <ShieldAlert size={18} className={lvlIcon[a.lvl]} />
-                  <div className="flex-1"><p className="font-semibold">{a.t}</p><p className="text-gray-500">{a.s}</p></div>
+                  <div className="flex-1">
+                    <p className="font-semibold">{a.t}</p>
+                    <p className="text-gray-500">{a.s}</p>
+                    <div className="flex gap-1 mt-1">
+                      <button onClick={() => onReview(a.id, false)} className="text-[10px] border border-[#cfdcf3] rounded px-1.5 py-0.5 hover:bg-blue-50">Examinée</button>
+                      <button onClick={() => onReview(a.id, true)} className="text-[10px] border border-[#f3cfcf] text-[#d02925] rounded px-1.5 py-0.5 hover:bg-red-50">Faux positif</button>
+                    </div>
+                  </div>
                   <div className="text-right"><span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${lvlBadge[a.lvl]}`}>{a.lvl === "Élevé" ? "Critique" : a.lvl}</span><p className="text-[9px] text-gray-400 mt-0.5">{a.h}</p></div>
                 </li>
               ))}
             </ul>
+            {anomalies.length > 5 && <p className="text-[10px] text-gray-400 mt-2">+ {anomalies.length - 5} autre(s) alerte(s)</p>}
           </div>
 
           <div className="bg-white rounded-xl border border-[#dbe5f5] p-4 shadow-sm">
@@ -508,7 +575,7 @@ const Audit: FC = () => {
               <button onClick={genReport} className="bg-[#1255d6] text-white text-[11px] font-semibold px-3 py-1.5 rounded-md">Générer</button>
             </div>
             <div className="grid grid-cols-3 text-center text-[10px] text-gray-600 divide-x">
-              <div><p className="text-lg font-bold text-[#e5342f]">{anomalies.length}</p>Anomalies détectées</div>
+              <div><p className="text-lg font-bold text-[#e5342f]">{anomalies.length}</p>Alertes à examiner</div>
               <div><p className="text-lg font-bold text-[#f59e0b]">{stats.critical24}</p>Événements critiques</div>
               <div><p className="text-lg font-bold text-[#14894f]">{stats.conf24 != null ? `${stats.conf24}%` : "—"}</p>Taux de conformité</div>
             </div>
