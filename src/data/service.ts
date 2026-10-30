@@ -17,7 +17,8 @@ export type Role =
   | "manager"
   | "gestionnaire"
   | "comptable"
-  | "caissier";
+  | "caissier"
+  | "capitaine";
 
 export type Action = "create" | "read" | "update" | "delete";
 
@@ -30,6 +31,7 @@ export const ROLES: Role[] = [
   "gestionnaire",
   "comptable",
   "caissier",
+  "capitaine",
 ];
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -41,6 +43,7 @@ export const ROLE_LABELS: Record<Role, string> = {
   gestionnaire: "Gestionnaire",
   comptable: "Comptable",
   caissier: "Caissier",
+  capitaine: "Capitaine",
 };
 
 // Rôles proposés dans le formulaire d'inscription public.
@@ -88,6 +91,12 @@ const PERMISSIONS: Record<Role, Partial<Record<Action, string[] | "*">>> = {
     read: "*",
     update: ["cashmovement", "fuelconsumption"],
   },
+  // Capitaine : lit tout, enregistre les pleins de carburant et leur mouvement de caisse
+  capitaine: {
+    create: ["fuelconsumption", "cashmovement"],
+    read: "*",
+    update: ["fuelconsumption"],
+  },
   caissier: {
     create: ["cashmovement", "reservation"],
     read: ["reservation", "trip", "boat", "goods", "cashmovement"],
@@ -99,7 +108,12 @@ const STORAGE_KEY = "currentUser";
 let currentUser: User | null = null;
 
 const normalizeRole = (role?: string | null): Role | null => {
-  const r = (role ?? "").toLowerCase().trim();
+  // Minuscules et sans accents : « Propriétaire » doit être reconnu comme « proprietaire »
+  const r = (role ?? "")
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .trim();
   return (ROLES as string[]).includes(r) ? (r as Role) : null;
 };
 
@@ -139,7 +153,9 @@ export const can = (action: Action, resource: string): boolean => {
   if (!role) return false;
   const allowed = PERMISSIONS[role][action];
   if (!allowed) return false;
-  return allowed === "*" || allowed.includes(resource.toLowerCase());
+  // Les appels envoient le nom de table au pluriel (« boats », « trips »...), les listes l'écrivent au singulier
+  const key = (s: string) => s.toLowerCase().replace(/s$/, "");
+  return allowed === "*" || allowed.map(key).includes(key(resource));
 };
 
 /* -------------------------------------------------------------------------- */
@@ -283,6 +299,57 @@ export const onGetByIdService = async <T>(endPoint: string, id: string): Promise
   } catch (error) {
     console.error("Erreur lors de la requête GET by ID", error);
     return null;
+  }
+};
+
+/* -------------------------------------------------------------------------- */
+/*          PLEIN DE CARBURANT : plein + mouvement de caisse (transaction)    */
+/* -------------------------------------------------------------------------- */
+
+export interface RefuelInput {
+  tripId: string;
+  quantity: number;
+  fuelPrice: number;
+  fuelType?: string;
+  confirm?: boolean; // true = l'utilisateur a confirmé les avertissements
+}
+
+export interface RefuelResult {
+  status: "success" | "needs-confirmation" | "error";
+  fuel?: FuelConsumption;
+  cashMovement?: CashMovement;
+  warnings?: string[];
+  message?: string;
+}
+
+export const onRefuelService = async (input: RefuelInput): Promise<RefuelResult> => {
+  if (!can("create", "fuelconsumptions") || !can("create", "cashmovements")) {
+    console.warn("Rôle non autorisé à enregistrer un plein de carburant");
+    return { status: "error", message: "Votre rôle n'est pas autorisé à enregistrer un plein." };
+  }
+  try {
+    const response = await axios.post<{
+      fuel: FuelConsumption;
+      cashMovement: CashMovement;
+      warnings?: string[];
+    }>(`${API}/fuelconsumptions/refuel`, input);
+    return {
+      status: "success",
+      fuel: response.data.fuel,
+      cashMovement: response.data.cashMovement,
+      warnings: response.data.warnings ?? [],
+    };
+  } catch (error) {
+    const err = error as {
+      response?: { status?: number; data?: { needsConfirmation?: boolean; warnings?: string[]; error?: string } };
+    };
+    if (err.response?.status === 409 && err.response.data?.needsConfirmation) {
+      return { status: "needs-confirmation", warnings: err.response.data.warnings ?? [] };
+    }
+    return {
+      status: "error",
+      message: err.response?.data?.error ?? "Erreur lors de l'enregistrement du plein.",
+    };
   }
 };
 
