@@ -174,6 +174,7 @@ const AuthPage = () => {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [role, setRole] = useState<Role>("gestionnaire");
+  const [roleCode, setRoleCode] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
@@ -219,6 +220,10 @@ const AuthPage = () => {
         setError("Veuillez sélectionner un rôle valide.");
         return;
       }
+      if (!roleCode.trim()) {
+        setError("Le code d'accès du rôle est obligatoire.");
+        return;
+      }
     }
 
     setIsSubmitting(true);
@@ -231,6 +236,7 @@ const AuthPage = () => {
             tel,
             password,
             role,
+            roleCode: roleCode.trim(),
           })
         : await loginUser({ email: login, password });
 
@@ -351,6 +357,23 @@ const AuthPage = () => {
               </div>
               <p className="mt-1 text-xs text-[#3e5788]">
                 Ce rôle détermine les droits d’accès dans la plateforme.
+              </p>
+            </div>
+
+            {/* ---------- Code d'accès du rôle (vérifié par le serveur) ---------- */}
+            <div>
+              <Field
+                id="roleCode"
+                label="Code d'accès du rôle"
+                icon={<Lock size={17} />}
+                type="password"
+                value={roleCode}
+                onChange={setRoleCode}
+                placeholder="Code fourni par le propriétaire"
+                autoComplete="off"
+              />
+              <p className="mt-1 text-xs text-[#3e5788]">
+                Chaque rôle est protégé par un code remis par le propriétaire de SAINT-JUDE.
               </p>
             </div>
 

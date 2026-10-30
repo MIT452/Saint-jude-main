@@ -47,8 +47,9 @@ export const ROLE_LABELS: Record<Role, string> = {
 };
 
 // Rôles proposés dans le formulaire d'inscription public.
-// Les rôles à privilèges élevés doivent être attribués par un administrateur.
-export const PUBLIC_ROLES: Role[] = ["manager", "gestionnaire", "comptable", "caissier"];
+// Chacun exige un code d'accès vérifié par le serveur ; les rôles à privilèges élevés
+// (admin, propriétaire, directeur) ne sont jamais proposés.
+export const PUBLIC_ROLES: Role[] = ["manager", "gestionnaire", "comptable", "caissier", "capitaine"];
 
 // Ressources autorisées par rôle et par action ("*" = toutes les ressources).
 // Une ressource absente de la liste est refusée côté interface.
@@ -111,7 +112,7 @@ const normalizeRole = (role?: string | null): Role | null => {
   // Minuscules et sans accents : « Propriétaire » doit être reconnu comme « proprietaire »
   const r = (role ?? "")
     .normalize("NFD")
-    .replace(/[̀-ͯ]/g, "")
+    .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
     .trim();
   return (ROLES as string[]).includes(r) ? (r as Role) : null;
@@ -190,6 +191,7 @@ export interface RegistrationInput extends AuthCredentials {
   lastName: string;
   tel: string;
   role: string;
+  roleCode: string; // code d'accès du rôle, vérifié par le serveur
 }
 
 export const loginUser = async (credentials: AuthCredentials): Promise<User> => {
