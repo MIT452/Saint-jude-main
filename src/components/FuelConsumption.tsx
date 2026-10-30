@@ -2,7 +2,7 @@ import { FC, useMemo, useState } from "react";
 import { Button } from "./ui/button";
 import {
   Filter, Fuel, Plus, Search, RotateCcw, Ship, User, Route,
-  Droplets, Banknote, ListChecks, Gauge,
+  Droplets, Banknote, ListChecks, Gauge, Timer, Scale, Ruler, AlertTriangle,
 } from "lucide-react";
 import AiFinanceChat from "./AiFinanceChat";
 import CashFuelConsumption from "./FuelConsumptionForm";
@@ -22,6 +22,17 @@ const formatTime = (d: string | Date) =>
 
 const nf = (n: number) => Math.round(n).toLocaleString("fr-FR");
 
+const EMPTY_GOODS: Array<{ tripId: string; totalWeight: number }> = [];
+
+// Un montant non calculable (absent, nul, division par zéro) s'affiche « – » et non « 0 Ar ».
+const fmtAr = (v: number | null | undefined) =>
+  typeof v === "number" && Number.isFinite(v) && v > 0 ? formatCurrency(v) : "–";
+
+const fmtRatio = (v: number | null, unit: string) =>
+  v === null || !Number.isFinite(v)
+    ? "–"
+    : `${v.toLocaleString("fr-FR", { maximumFractionDigits: 2 })} ${unit}`;
+
 const FuelConsumption: FC = () => {
   const [showFuel, setShowFuel] = useState<boolean>(false);
   const [searchTerm, setSearchTerm] = useState("");
@@ -33,6 +44,11 @@ const FuelConsumption: FC = () => {
 
   const { boat: allBoat, trip: allTrip, fuelConsumption } = useSelector((state: RootState) => state.stJude);
   const { allUser, currentUser } = useSelector((state: RootState) => state.users);
+  // Marchandises (pour les litres par tonne). Le nom de la clé du store n'a pas été vérifié : adapter si besoin.
+  const goodsList = useSelector(
+    (state: RootState) =>
+      ((state.stJude as unknown as { goods?: Array<{ tripId: string; totalWeight: number }> }).goods) ?? EMPTY_GOODS
+  );
 
   // Lignes enrichies (utilisateur, trajet, bateau, quantité estimée)
   const rows = useMemo(() => {
@@ -43,8 +59,18 @@ const FuelConsumption: FC = () => {
         const boat = findBoat(trip.boatId, allBoat);
         const price = Number(f.fuelPrice) || 0;
         const cost = Number(f.cost) || 0;
-        const liters = price > 0 ? cost / price : 0; // quantité = coût total / prix par litre
-        return { f, user, trip, boat, price, cost, liters, route: `${trip.from} → ${trip.to}` };
+        const qty = Number(f.quantity);
+        const liters = qty > 0 ? qty : price > 0 ? cost / price : 0; // quantité saisie, sinon coût / prix
+        const dep = new Date(trip.depart).getTime();
+        const arr = new Date(trip.arrive).getTime();
+        const hours = Number.isFinite(dep) && Number.isFinite(arr) && arr > dep ? (arr - dep) / 3_600_000 : null;
+        const kg = goodsList
+          .filter((g) => g.tripId === trip.id)
+          .reduce((s, g) => s + (Number(g.totalWeight) || 0), 0);
+        const tonnes = kg > 0 ? kg / 1000 : null; // poids supposé en kg
+        const dist = Number((trip as unknown as { distanceKm?: number }).distanceKm);
+        const km = dist > 0 ? dist : null; // s'allumera dès qu'une colonne distanceKm existera sur trips
+        return { f, user, trip, boat, price, cost, liters, hours, tonnes, km, route: `${trip.from} → ${trip.to}` };
       })
       .filter(({ boat }) => {
         // Restriction par rôle
@@ -54,7 +80,7 @@ const FuelConsumption: FC = () => {
         return true;
       })
       .sort((a, b) => new Date(b.f.createdAt as string).getTime() - new Date(a.f.createdAt as string).getTime());
-  }, [fuelConsumption, allUser, allTrip, allBoat, currentUser]);
+  }, [fuelConsumption, allUser, allTrip, allBoat, currentUser, goodsList]);
 
   // Options des filtres (dynamiques)
   const tripOptions = useMemo(() => Array.from(new Set(rows.map((r) => r.route))), [rows]);
@@ -98,7 +124,55 @@ const FuelConsumption: FC = () => {
   // Indicateurs
   const totalLiters = filtered.reduce((s, r) => s + r.liters, 0);
   const totalCost = filtered.reduce((s, r) => s + r.cost, 0);
-  const avgPrice = totalLiters > 0 ? totalCost / totalLiters : 0;
+  const avgPrice = totalLiters > 0 ? totalCost / totalLiters : null;
+
+  // Indicateurs de performance, calculés par voyage (un voyage avec 2 pleins ne compte qu'une fois sa durée)
+  const tripStats = useMemo(() => {
+    const map = new Map<
+      string,
+      { boat: string; liters: number; hours: number | null; tonnes: number | null; km: number | null }
+    >();
+    filtered.forEach((r) => {
+      const cur = map.get(r.trip.id) ?? { boat: r.boat.name, liters: 0, hours: r.hours, tonnes: r.tonnes, km: r.km };
+      cur.liters += r.liters;
+      map.set(r.trip.id, cur);
+    });
+    return map;
+  }, [filtered]);
+
+  const ratio = (pick: (s: { hours: number | null; tonnes: number | null; km: number | null }) => number | null) => {
+    let l = 0;
+    let d = 0;
+    tripStats.forEach((s) => {
+      const v = pick(s);
+      if (v !== null && v > 0 && s.liters > 0) {
+        l += s.liters;
+        d += v;
+      }
+    });
+    return d > 0 ? l / d : null;
+  };
+  const lPerHour = ratio((s) => s.hours);
+  const lPerKm = ratio((s) => s.km);
+  const lPerTonne = ratio((s) => s.tonnes);
+
+  // Voyages dont la consommation (L/h) s'écarte de plus de 40 % de la moyenne du bateau (min. 3 voyages)
+  const anomalyTrips = useMemo(() => {
+    const byBoat = new Map<string, number[]>();
+    tripStats.forEach((s) => {
+      if (s.hours && s.hours > 0 && s.liters > 0) {
+        byBoat.set(s.boat, [...(byBoat.get(s.boat) ?? []), s.liters / s.hours]);
+      }
+    });
+    const out = new Set<string>();
+    tripStats.forEach((s, id) => {
+      const arr = byBoat.get(s.boat) ?? [];
+      if (arr.length < 3 || !s.hours || s.hours <= 0) return;
+      const avg = arr.reduce((a, b) => a + b, 0) / arr.length;
+      if (avg > 0 && Math.abs(s.liters / s.hours - avg) / avg > 0.4) out.add(id);
+    });
+    return out;
+  }, [tripStats]);
 
   // Répartition par type
   const byType = useMemo(() => {
@@ -261,7 +335,7 @@ const FuelConsumption: FC = () => {
                   <span className="h-11 w-11 rounded-full bg-green-600 text-white flex items-center justify-center"><Banknote className="h-5 w-5" /></span>
                   <p className="text-sm font-medium text-green-700">Coût total carburant</p>
                 </div>
-                <p className="mt-3 text-2xl font-bold text-green-800">{formatCurrency(totalCost)}</p>
+                <p className="mt-3 text-2xl font-bold text-green-800">{filtered.length > 0 ? formatCurrency(totalCost) : "–"}</p>
               </CardContent>
             </Card>
             <Card className="border border-purple-200 bg-gradient-to-br from-purple-50 to-white shadow-sm">
@@ -270,7 +344,7 @@ const FuelConsumption: FC = () => {
                   <span className="h-11 w-11 rounded-full bg-purple-600 text-white flex items-center justify-center"><Droplets className="h-5 w-5" /></span>
                   <p className="text-sm font-medium text-purple-700">Prix moyen / L</p>
                 </div>
-                <p className="mt-3 text-2xl font-bold text-purple-800">{formatCurrency(avgPrice)}</p>
+                <p className="mt-3 text-2xl font-bold text-purple-800">{fmtAr(avgPrice)}</p>
               </CardContent>
             </Card>
             <Card className="border border-orange-200 bg-gradient-to-br from-orange-50 to-white shadow-sm">
@@ -282,6 +356,43 @@ const FuelConsumption: FC = () => {
                 <p className="mt-3 text-2xl font-bold text-orange-800">{filtered.length}</p>
               </CardContent>
             </Card>
+          </div>
+
+          {/* Indicateurs de performance */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {[
+              {
+                icon: Timer, label: "Litres / heure", value: fmtRatio(lPerHour, "L/h"),
+                hint: lPerHour === null ? "Durée du voyage non calculable" : "Moyenne sur les voyages avec durée",
+                wrap: "border border-cyan-200 bg-gradient-to-br from-cyan-50 to-white",
+                dot: "bg-cyan-600", label2: "text-cyan-700", big: "text-cyan-800",
+              },
+              {
+                icon: Ruler, label: "Litres / km", value: fmtRatio(lPerKm, "L/km"),
+                hint: lPerKm === null ? "Distance non renseignée sur les trajets" : "Moyenne sur les voyages avec distance",
+                wrap: "border border-rose-200 bg-gradient-to-br from-rose-50 to-white",
+                dot: "bg-rose-600", label2: "text-rose-700", big: "text-rose-800",
+              },
+              {
+                icon: Scale, label: "Litres / tonne", value: fmtRatio(lPerTonne, "L/t"),
+                hint: lPerTonne === null ? "Aucune marchandise liée aux voyages" : "Moyenne sur les voyages avec cargaison",
+                wrap: "border border-teal-200 bg-gradient-to-br from-teal-50 to-white",
+                dot: "bg-teal-600", label2: "text-teal-700", big: "text-teal-800",
+              },
+            ].map((k) => (
+              <Card key={k.label} className={`${k.wrap} shadow-sm`}>
+                <CardContent className="pt-6">
+                  <div className="flex items-center gap-3">
+                    <span className={`h-11 w-11 rounded-full ${k.dot} text-white flex items-center justify-center`}>
+                      <k.icon className="h-5 w-5" />
+                    </span>
+                    <p className={`text-sm font-medium ${k.label2}`}>{k.label}</p>
+                  </div>
+                  <p className={`mt-3 text-2xl font-bold ${k.big}`}>{k.value}</p>
+                  <p className="mt-1 text-xs text-gray-500">{k.hint}</p>
+                </CardContent>
+              </Card>
+            ))}
           </div>
 
           {/* Tableau */}
@@ -346,8 +457,18 @@ const FuelConsumption: FC = () => {
                               {f.fuelType}
                             </span>
                           </TableCell>
-                          <TableCell className="text-right">{nf(liters)}</TableCell>
-                          <TableCell className="text-right">{formatCurrency(f.fuelPrice)}</TableCell>
+                          <TableCell className="text-right">
+                            {liters > 0 ? nf(liters) : "–"}
+                            {anomalyTrips.has(trip.id) && (
+                              <span
+                                title="Consommation (L/h) éloignée de plus de 40 % de la moyenne de ce bateau"
+                                className="ml-1 inline-flex align-middle text-amber-600"
+                              >
+                                <AlertTriangle className="h-3.5 w-3.5" />
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">{fmtAr(Number(f.fuelPrice))}</TableCell>
                           <TableCell className="text-right font-semibold">{formatCurrency(f.cost)}</TableCell>
                         </TableRow>
                       );
