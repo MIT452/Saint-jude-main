@@ -10,17 +10,23 @@ import {
 import { loginUser, registerUser, PUBLIC_ROLES, ROLE_LABELS } from "../data/service";
 import type { Role } from "../data/service";
 
-const LOGIN_PHOTO = "login-bg.jpg";
-const REGISTER_PHOTO = "register-banner.jpg";
-const AINA_PHOTO = "aina.jpg";
+/* ---------- Images de fond ----------
+   Laisser "" tant que le fichier n'existe pas dans public/images/.
+   Ex. : const LOGIN_PHOTO = "login-bg.jpg";  (puis ajouter public/images/login-bg.jpg) */
+const LOGIN_PHOTO = "";
+const REGISTER_PHOTO = "";
+const AINA_PHOTO = "";
 
 const BASE = (import.meta.env.BASE_URL as string | undefined) ?? "/";
 const photoUrl = (file: string) => `url(${BASE}images/${file})`;
+// Ajoute la photo seulement si un fichier est défini, sinon dégradé seul (aucun 404)
+const withPhoto = (file: string, fallback: string) => (file ? `${photoUrl(file)}, ${fallback}` : fallback);
 
 const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
-const LOGIN_BG = `${photoUrl(LOGIN_PHOTO)}, ${SEA}`;
-const BANNER_BG = `${photoUrl(REGISTER_PHOTO)}, ${SEA}`;
-const AINA_BG = `${photoUrl(AINA_PHOTO)}, linear-gradient(160deg,#6fb4f2 0%,#2f86dd 100%)`;
+const AINA_SKY = "linear-gradient(160deg,#6fb4f2 0%,#2f86dd 100%)";
+const LOGIN_BG = withPhoto(LOGIN_PHOTO, SEA);
+const BANNER_BG = withPhoto(REGISTER_PHOTO, SEA);
+const AINA_BG = withPhoto(AINA_PHOTO, AINA_SKY);
 
 // Rôles proposés à l'inscription (les rôles à privilèges élevés sont exclus)
 const ROLE_OPTIONS = PUBLIC_ROLES.map((value) => ({ value, label: ROLE_LABELS[value] }));
