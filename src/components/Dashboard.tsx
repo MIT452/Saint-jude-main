@@ -11,9 +11,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
 import { RootState } from "../redux";
-import { formatCurrency, generateRevenueDataSets } from "../Tools/Tools";
-import { RevenueDataSets } from "../data/type";
-import { revenueDataSetsVoid } from "../data/dataVoid";
+import { formatCurrency } from "../Tools/Tools";
 import { askAIJson } from "../data/auditAI";
 
 interface PropsDashboard {
@@ -43,6 +41,74 @@ const compact = (v: number) =>
 
 const GOODS_COLORS = ["#2563eb", "#f59e0b", "#22c55e", "#7c3aed", "#ef4444"];
 const capitalizeWords = (s: string) => s.replace(/(^|\s)(\p{L})/gu, (_, a, b) => a + b.toUpperCase());
+const capFirst = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
+const rnd = (n: number) => Math.round(n);
+
+// ---------- Séries réelles (chiffre d'affaires = crédits de la caisse, réservations = nombre) par période
+type Point = { periode: string; revenus: number; reservations: number };
+const buildSeries = (period: string, cash: any[], res: any[]): Point[] => {
+  const today = new Date();
+  const y = today.getFullYear();
+  const mo = today.getMonth();
+  let buckets: { key: string; label: string }[] = [];
+  let keyOf: (d: Date) => string = () => "";
+
+  if (period === "hebdomadaire") {
+    const monday = (d: Date) => {
+      const x = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+      return x;
+    };
+    keyOf = (d) => monday(d).toISOString().slice(0, 10);
+    const base = monday(today);
+    for (let i = 7; i >= 0; i--) {
+      const d = new Date(base);
+      d.setDate(d.getDate() - i * 7);
+      buckets.push({ key: keyOf(d), label: `${pad(d.getDate())}/${pad(d.getMonth() + 1)}` });
+    }
+  } else if (period === "trimestrielle") {
+    keyOf = (d) => `${d.getFullYear()}-T${Math.floor(d.getMonth() / 3) + 1}`;
+    for (let i = 3; i >= 0; i--) {
+      const d = new Date(y, mo - i * 3, 1);
+      const q = Math.floor(d.getMonth() / 3) + 1;
+      buckets.push({ key: `${d.getFullYear()}-T${q}`, label: `T${q} ${d.getFullYear()}` });
+    }
+  } else if (period === "semestrielle") {
+    keyOf = (d) => `${d.getFullYear()}-S${d.getMonth() < 6 ? 1 : 2}`;
+    for (let i = 3; i >= 0; i--) {
+      const d = new Date(y, mo - i * 6, 1);
+      const s2 = d.getMonth() < 6 ? 1 : 2;
+      buckets.push({ key: `${d.getFullYear()}-S${s2}`, label: `S${s2} ${d.getFullYear()}` });
+    }
+  } else if (period === "annuelle") {
+    keyOf = (d) => String(d.getFullYear());
+    for (let i = 2; i >= 0; i--) buckets.push({ key: String(y - i), label: String(y - i) });
+  } else {
+    keyOf = (d) => `${d.getFullYear()}-${d.getMonth()}`;
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(y, mo - i, 1);
+      buckets.push({
+        key: `${d.getFullYear()}-${d.getMonth()}`,
+        label: capFirst(d.toLocaleDateString("fr-FR", { month: "short" })),
+      });
+    }
+  }
+
+  const map = new Map<string, Point>(buckets.map((b) => [b.key, { periode: b.label, revenus: 0, reservations: 0 }]));
+  cash.forEach((m) => {
+    const d = new Date(m.date);
+    if (isNaN(d.getTime())) return;
+    const p = map.get(keyOf(d));
+    if (p) p.revenus += Number(m.credit || 0);
+  });
+  res.forEach((r) => {
+    const d = new Date(r.date);
+    if (isNaN(d.getTime())) return;
+    const p = map.get(keyOf(d));
+    if (p) p.reservations += 1;
+  });
+  return buckets.map((b) => map.get(b.key)!);
+};
 
 // Code météo Open-Meteo -> libellé + icône
 const wmo = (c: number): { label: string; Icon: LucideIcon } => {
@@ -122,7 +188,6 @@ const tripLabel = (t: any): string => {
 
 const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [revenuePeriod, setRevenuePeriod] = useState("mensuelle");
-  const [revenueDataSets, setRevenueDataSets] = useState<RevenueDataSets>(revenueDataSetsVoid);
   const [weather, setWeather] = useState<Weather | null>(null);
   const [weatherErr, setWeatherErr] = useState(false);
   const [insight, setInsight] = useState<Insight | null>(null);
@@ -163,10 +228,6 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
     return () => clearInterval(id);
   }, []);
 
-  useEffect(() => {
-    setRevenueDataSets(generateRevenueDataSets(cashMouvement));
-  }, [cashMouvement]);
-
   // ---------- Données réelles
   const totalCredit = cashMouvement.reduce((a, { credit }) => a + Number(credit), 0);
   const totalDebit = cashMouvement.reduce((a, { debit }) => a + Number(debit), 0);
@@ -178,19 +239,23 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const cancelled = reservation.filter(isCancelled).length;
   const unpaidCount = reservation.filter((r) => Number(r.amountToPay) > 0).length;
 
-  const currentData: any[] = (revenueDataSets[revenuePeriod as keyof typeof revenueDataSets] || revenueDataSets.mensuelle) as any[];
-  const revNumbers = currentData.map((d) => Number(d.revenus));
-  const revBest = currentData.length
-    ? currentData.reduce((b, d) => (b && Number(b.revenus) >= Number(d.revenus) ? b : d), null as any)
+  // Séries réelles calculées ici à partir de la caisse et des réservations
+  const currentData: Point[] = useMemo(
+    () => buildSeries(revenuePeriod, cashMouvement as any[], reservation),
+    [revenuePeriod, cashMouvement, reservation],
+  );
+  const monthly: Point[] = useMemo(() => buildSeries("mensuelle", cashMouvement as any[], reservation), [cashMouvement, reservation]);
+  const revNumbers = currentData.map((d) => d.revenus);
+  const revBest = currentData.some((d) => d.revenus > 0)
+    ? currentData.reduce((b, d) => (d.revenus > b.revenus ? d : b), currentData[0])
     : null;
-  const hasResSeries = currentData.some((d) => d.reservations != null);
-  const monthly: any[] = (revenueDataSets.mensuelle as any[]) ?? [];
-  const caTrend = trendOf(monthly.map((d) => Number(d.revenus)));
-  const resTrend = trendOf(monthly.map((d) => Number(d.reservations || 0)));
+  const hasResSeries = currentData.some((d) => d.reservations > 0);
+  const caTrend = trendOf(monthly.map((d) => d.revenus));
+  const resTrend = trendOf(monthly.map((d) => d.reservations));
 
   // Prévisions (régression linéaire sur les séries réelles)
-  const forecast = useMemo(() => makeForecast(currentData, "revenus"), [revenueDataSets, revenuePeriod]); // eslint-disable-line react-hooks/exhaustive-deps
-  const demandForecast = useMemo(() => makeForecast(currentData, "reservations"), [revenueDataSets, revenuePeriod]); // eslint-disable-line react-hooks/exhaustive-deps
+  const forecast = useMemo(() => makeForecast(currentData, "revenus"), [currentData]);
+  const demandForecast = useMemo(() => makeForecast(currentData, "reservations"), [currentData]);
 
   // Ventes par trajet : on relie chaque réservation à son trajet (table trips)
   const routeStats = useMemo(() => {
@@ -220,7 +285,7 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       const key = raw.toLowerCase();
       const w = Number(g.totalWeight ?? g.weight ?? g.poids ?? 0);
       if (w > 0) {
-        const cur = m.get(key) ?? { label: capitalizeWords(raw), w: 0 };
+        const cur = m.get(key) ?? { label: capFirst(raw), w: 0 };
         cur.w += w;
         m.set(key, cur);
       }
@@ -585,18 +650,18 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
               <option value="annuelle">Annuelle</option>
             </select>
           </div>
-          {currentData.length === 0 || !dataReady ? (
+          {!dataReady ? (
             emptyChart
           ) : (
             <ResponsiveContainer width="100%" height={220}>
               <ComposedChart data={currentData} margin={{ top: 20, right: 10 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
                 <XAxis dataKey="periode" tick={{ fontSize: 10 }} />
-                <YAxis yAxisId="ca" tick={{ fontSize: 10 }} tickFormatter={(v: number) => compact(v * 1000)} />
+                <YAxis yAxisId="ca" tick={{ fontSize: 10 }} tickFormatter={(v: number) => compact(v)} />
                 <YAxis yAxisId="n" orientation="right" tick={{ fontSize: 10 }} allowDecimals={false} />
                 <RechartsTooltip
                   formatter={(v: number | string, name: string) => [
-                    name === "Réservations" ? v : formatCurrency(Number(v) * 1000),
+                    name === "Réservations" ? v : formatCurrency(Number(v)),
                     name,
                   ]}
                 />
@@ -610,19 +675,19 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             <div className="border rounded-md p-2 bg-[#f8fafd]">
               <p className="text-gray-500">Revenu moyen par réservation</p>
               <p className="font-bold text-[#1255d6] text-xs">
-                {reservation.length ? formatCurrency(totalCredit / reservation.length) : dash}
+                {reservation.length ? formatCurrency(rnd(totalCredit / reservation.length)) : dash}
               </p>
             </div>
             <div className="border rounded-md p-2 bg-[#f8fafd]">
               <p className="text-gray-500">Panier moyen</p>
               <p className="font-bold text-[#1255d6] text-xs">
-                {reservation.length ? formatCurrency(payTotal / reservation.length) : dash}
+                {reservation.length ? formatCurrency(rnd(payTotal / reservation.length)) : dash}
               </p>
             </div>
             <div className="border rounded-md p-2 bg-[#f8fafd]">
               <p className="text-gray-500">Meilleure période</p>
               <p className="font-bold text-[#1255d6] text-xs">
-                {revBest ? `${revBest.periode} (${formatCurrency(Number(revBest.revenus) * 1000)})` : dash}
+                {revBest ? `${revBest.periode} (${formatCurrency(rnd(revBest.revenus))})` : dash}
               </p>
             </div>
           </div>
@@ -724,7 +789,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             )}
             {boatsWithGps === 0 && (
               <p className="absolute left-2 bottom-2 text-[10px] text-gray-600 bg-white/80 rounded px-2 py-1">
-                Aucune position GPS enregistrée.
+                Aucune position GPS enregistrée dans la base.
               </p>
             )}
           </div>
@@ -807,7 +872,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
               <ResponsiveContainer width="100%" height={220}>
                 <ComposedChart data={routeStats.slice(0, 6)} margin={{ top: 10, right: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
+                  <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} angle={-25} textAnchor="end" height={50} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
                   <YAxis yAxisId="ca" tick={{ fontSize: 9 }} tickFormatter={compact} />
                   <YAxis yAxisId="n" orientation="right" tick={{ fontSize: 9 }} allowDecimals={false} />
                   <RechartsTooltip
@@ -890,8 +955,8 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                   <AreaChart data={forecast.data} margin={{ left: -15 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
                     <XAxis dataKey="periode" tick={{ fontSize: 9 }} />
-                    <YAxis tick={{ fontSize: 9 }} tickFormatter={(v: number) => compact(v * 1000)} />
-                    <RechartsTooltip formatter={(v: number | string, name: string) => [formatCurrency(Number(v) * 1000), name]} />
+                    <YAxis tick={{ fontSize: 9 }} tickFormatter={(v: number) => compact(v)} />
+                    <RechartsTooltip formatter={(v: number | string, name: string) => [formatCurrency(Number(v)), name]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
                     <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
                     <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
@@ -936,7 +1001,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                 <p className="text-gray-700">
                   {insight?.prevision ||
                     (forecast.next != null
-                      ? `Tendance : prochain point estimé à ${formatCurrency(forecast.next * 1000)} (régression linéaire).`
+                      ? `Tendance : prochain point estimé à ${formatCurrency(rnd(forecast.next))} (régression linéaire).`
                       : "Pas assez de données pour estimer une tendance.")}
                 </p>
               )}
