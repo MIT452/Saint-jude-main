@@ -1036,7 +1036,7 @@ Réponds UNIQUEMENT en JSON: {"reponse":"5 phrases maximum, en français, en cit
               <ResponsiveContainer width="100%" height={220}>
                 <ComposedChart data={routeStats.slice(0, 6)} margin={{ top: 10, right: 0, left: -10 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
-                  <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
+                  <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} angle={-30} textAnchor="end" height={52} tickFormatter={(v: string) => { const s = v.split(" → ")[1] ?? v; return s.length > 11 ? `${s.slice(0, 10)}…` : s; }} />
                   <YAxis yAxisId="ca" tick={{ fontSize: 9 }} tickFormatter={compact} />
                   <YAxis yAxisId="n" orientation="right" tick={{ fontSize: 9 }} allowDecimals={false} />
                   <RechartsTooltip
@@ -1124,7 +1124,7 @@ Réponds UNIQUEMENT en JSON: {"reponse":"5 phrases maximum, en français, en cit
                 <ResponsiveContainer width="100%" height={190}>
                   <BarChart data={routeStats.slice(0, 6).map((r) => ({ name: r.name, prix: Math.round(r.ca / r.n) }))} margin={{ left: -10 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="#e5ebf5" vertical={false} />
-                    <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} tickFormatter={(v: string) => v.split(" → ")[1] ?? v} />
+                    <XAxis dataKey="name" tick={{ fontSize: 8 }} interval={0} angle={-30} textAnchor="end" height={52} tickFormatter={(v: string) => { const s = v.split(" → ")[1] ?? v; return s.length > 11 ? `${s.slice(0, 10)}…` : s; }} />
                     <YAxis tick={{ fontSize: 9 }} tickFormatter={compact} />
                     <RechartsTooltip formatter={(v: number | string) => [formatCurrency(Number(v)), "Prix moyen"]} />
                     <Bar dataKey="prix" fill="#7c3aed" radius={[3, 3, 0, 0]} />
