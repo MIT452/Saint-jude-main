@@ -167,7 +167,9 @@ const fmtPct = (p: number) => `${p > 0 ? "+" : ""}${p.toFixed(1).replace(".", ",
 const makeForecast = (rows: any[], key: string) => {
   const vals = rows.map((d) => Number(d[key] || 0));
   const n = vals.length;
-  if (n < 2) return { data: rows.map((d, i) => ({ periode: d.periode, reel: vals[i] })) as any[], next: null as number | null };
+  // Prévision fiable seulement avec au moins 3 périodes contenant des données
+  const filled = vals.filter((v) => v > 0).length;
+  if (n < 2 || filled < 3) return { data: rows.map((d, i) => ({ periode: d.periode, reel: vals[i] })) as any[], next: null as number | null, enough: false };
   const xs = vals.map((_, i) => i);
   const mx = xs.reduce((a, b) => a + b, 0) / n;
   const my = vals.reduce((a, b) => a + b, 0) / n;
@@ -175,7 +177,7 @@ const makeForecast = (rows: any[], key: string) => {
   const next = Math.max(0, my + slope * (n - mx));
   const data: any[] = rows.map((d, i) => ({ periode: d.periode, reel: vals[i], prevision: i === n - 1 ? vals[i] : undefined }));
   data.push({ periode: "Prévision", prevision: Number(next.toFixed(1)) });
-  return { data, next };
+  return { data, next, enough: true };
 };
 
 // Libellé d'un trajet à partir de la table trips (colonnes "from" et "to")
@@ -989,6 +991,11 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                   </BarChart>
                 </ResponsiveContainer>
               ) : emptyChart)}
+              {((tab === "Demande" && !demandForecast.enough) || (tab === "Recettes" && !forecast.enough)) && (
+                <p className="text-[10px] text-gray-500 mt-1">
+                  Historique insuffisant : la prévision demande au moins 3 périodes avec des données. Seules les données réelles sont affichées.
+                </p>
+              )}
             </div>
             <div className="rounded-lg bg-[#eef4ff] p-3 text-[11px] space-y-2">
               <p className="font-bold text-[#1255d6] flex items-center gap-1.5">
