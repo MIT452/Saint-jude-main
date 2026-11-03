@@ -54,7 +54,10 @@ const FuelConsumption: FC = () => {
   const rows = useMemo(() => {
     return fuelConsumption
       .map((f) => {
-        const user = findUser(f.userId, allUser);
+        const resolvedUser = findUser(f.userId, [...allUser, ...(currentUser ? [currentUser] : [])]);
+        const user = resolvedUser.name.toLowerCase() !== "inconnu"
+          ? resolvedUser
+          : { ...resolvedUser, name: f.userId ? "Utilisateur non relié" : "Non identifié", lastName: "" };
         const trip = findTrip(f.tripId, allTrip);
         const boat = findBoat(trip.boatId, allBoat);
         const price = Number(f.fuelPrice) || 0;
@@ -443,7 +446,7 @@ const FuelConsumption: FC = () => {
                               <span className="h-6 w-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
                                 <User className="h-3.5 w-3.5" />
                               </span>
-                              {`${user.name} ${user.lastName}`}
+                              <span title={user.id || f.userId || undefined}>{`${user.name} ${user.lastName}`}</span>
                             </span>
                           </TableCell>
                           <TableCell>

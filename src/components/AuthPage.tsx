@@ -7,7 +7,7 @@ import {
   Anchor, ArrowRight, Bell, Bot, CalendarDays, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
   Ship, ShieldCheck, User, UserPlus, Users,
 } from "lucide-react";
-import { loginUser, registerUser, PUBLIC_ROLES, ROLE_LABELS } from "../data/service";
+import { loginUser, registerUser } from "../data/service";
 import type { Role } from "../data/service";
 
 /* ---------- Images de fond ----------
@@ -28,8 +28,13 @@ const LOGIN_BG = withPhoto(LOGIN_PHOTO, SEA);
 const BANNER_BG = withPhoto(REGISTER_PHOTO, SEA);
 const AINA_BG = withPhoto(AINA_PHOTO, AINA_SKY);
 
-// Rôles proposés à l'inscription (les rôles à privilèges élevés sont exclus)
-const ROLE_OPTIONS = PUBLIC_ROLES.map((value) => ({ value, label: ROLE_LABELS[value] }));
+// Rôles proposés à l'inscription : Propriétaire, Admin, Gestionnaire.
+// Chaque rôle est protégé par un code d'accès vérifié côté serveur (voir backend).
+const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
+  { value: "proprietaire" as Role, label: "Propriétaire" },
+  { value: "admin" as Role, label: "Administrateur" },
+  { value: "gestionnaire" as Role, label: "Gestionnaire" },
+];
 
 const RULES: Array<[string, (p: string) => boolean]> = [
   ["Au moins 8 caractères", (p) => p.length >= 8],
@@ -222,7 +227,7 @@ const AuthPage = () => {
         setError("Le mot de passe ne respecte pas les règles de sécurité.");
         return;
       }
-      if (!role || !PUBLIC_ROLES.includes(role)) {
+      if (!role || !ROLE_OPTIONS.some((r) => r.value === role)) {
         setError("Veuillez sélectionner un rôle valide.");
         return;
       }
@@ -336,7 +341,7 @@ const AuthPage = () => {
             <Field id="email" label="Adresse e-mail" icon={<Mail size={17} />} type="email" value={login} onChange={setLogin} placeholder="exemple@domaine.com" autoComplete="email" />
             <Field id="tel" label="Téléphone" icon={<Phone size={17} />} type="tel" value={tel} onChange={setTel} placeholder="+261 34 12 34 567" autoComplete="tel" />
 
-            {/* ---------- Sélecteur de rôle ---------- */}
+            {/* ---------- Sélecteur de rôle : Propriétaire / Admin / Gestionnaire ---------- */}
             <div>
               <label htmlFor="role" className="flex items-center gap-2 text-sm font-semibold text-[#10285e]">
                 <Users size={16} className="text-[#1255d6]" />
@@ -379,7 +384,7 @@ const AuthPage = () => {
                 autoComplete="off"
               />
               <p className="mt-1 text-xs text-[#3e5788]">
-                Chaque rôle est protégé par un code remis par le propriétaire de SAINT-JUDE.
+                Chaque rôle (Propriétaire, Administrateur, Gestionnaire) est protégé par son propre code, remis par le propriétaire de SAINT-JUDE.
               </p>
             </div>
 

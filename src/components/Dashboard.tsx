@@ -11,9 +11,11 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
+import { io, type Socket } from "socket.io-client";
 import { RootState } from "../redux";
 import { formatCurrency } from "../Tools/Tools";
 import { askAIJson } from "../data/auditAI";
+import { getLatestPosition, getRealtimeOrigin } from "../data/intelligenceService";
 
 interface PropsDashboard {
   onSetToAudit: (value: string) => void;
@@ -28,6 +30,7 @@ type Weather = {
   days: { d: string; t: string; label: string; Icon: LucideIcon }[];
 };
 type Tab = "Demande" | "Prix" | "Recettes" | "Marchandises";
+type GpsPosition = { boatId: string; latitude: number; longitude: number; speed?: number; createdAt?: string };
 
 const card = "bg-white rounded-xl border border-[#dbe5f5] shadow-sm";
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -143,10 +146,40 @@ const CITIES: { n: string; lon: number; lat: number; port?: boolean; left?: bool
   { n: "Toliara", lon: 43.68, lat: -23.35, port: true },
   { n: "Tolagnaro", lon: 47.0, lat: -25.03, port: true, left: true },
 ];
-const boatPos = (b: any): [number, number] | null => {
-  const la = Number(b.latitude ?? b.lat);
-  const lo = Number(b.longitude ?? b.lng ?? b.lon);
-  return Number.isFinite(la) && Number.isFinite(lo) && lo > 42 && lo < 52 && la < -10 && la > -27 ? [lo, la] : null;
+const boatIdOf = (boat: any) => String(boat.id ?? boat._id ?? boat.boatId ?? "").trim();
+const normalizeGpsPosition = (value: unknown, fallbackBoatId: string): GpsPosition | null => {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Record<string, unknown>;
+  const latitude = Number(raw.latitude ?? raw.lat);
+  const longitude = Number(raw.longitude ?? raw.lng ?? raw.lon);
+  if (!Number.isFinite(latitude) || latitude < -90 || latitude > 90) return null;
+  if (!Number.isFinite(longitude) || longitude < -180 || longitude > 180) return null;
+  const speed = Number(raw.speed);
+  const createdAt = raw.createdAt ?? raw.created_at ?? raw.timestamp;
+  return {
+    boatId: String(raw.boatId ?? raw.boat_id ?? fallbackBoatId),
+    latitude,
+    longitude,
+    ...(Number.isFinite(speed) ? { speed } : {}),
+    ...(createdAt ? { createdAt: String(createdAt) } : {}),
+  };
+};
+const isOnGpsMap = (position: GpsPosition) =>
+  position.longitude > 42 && position.longitude < 52 && position.latitude < -10 && position.latitude > -27;
+const mergeGpsPosition = (current: GpsPosition | undefined, incoming: GpsPosition) => {
+  if (!current) return incoming;
+  const currentTime = Date.parse(current.createdAt ?? "");
+  const incomingTime = Date.parse(incoming.createdAt ?? "");
+  if (Number.isFinite(currentTime) && Number.isFinite(incomingTime) && incomingTime < currentTime) return current;
+  return { ...current, ...incoming, createdAt: incoming.createdAt ?? current.createdAt };
+};
+const gpsMovementLabel = (position: GpsPosition) =>
+  typeof position.speed !== "number" ? "Vitesse indisponible" : position.speed > 0.5 ? "En mouvement" : "À l’arrêt";
+const gpsMovementColor = (position: GpsPosition) =>
+  typeof position.speed !== "number" ? "#2563eb" : position.speed > 0.5 ? "#16a34a" : "#f59e0b";
+const gpsDateLabel = (createdAt?: string) => {
+  if (!createdAt || !Number.isFinite(Date.parse(createdAt))) return "Date indisponible";
+  return new Date(createdAt).toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
 };
 
 const boatName = (b: any) => b.name ?? b.nom ?? b.matricule ?? "Bateau";
@@ -304,6 +337,9 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [showDetail, setShowDetail] = useState(false);
   const [tab, setTab] = useState<Tab>("Demande");
   const [selectedBoat, setSelectedBoat] = useState<number | null>(null);
+  const [gpsPositions, setGpsPositions] = useState<Record<string, GpsPosition>>({});
+  const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsUnavailable, setGpsUnavailable] = useState(false);
   const [slow, setSlow] = useState(false);
   const [stuck, setStuck] = useState(false);
   const [demo, setDemo] = useState<boolean>(() => {
@@ -332,6 +368,66 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       ((state.stJude as any).goods ?? (state.stJude as any).goodsList ?? (state.stJude as any).marchandise ?? []) as any[],
   );
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
+
+  useEffect(() => {
+    let cancelled = false;
+    let socket: Socket | null = null;
+
+    if (demo || boats.length === 0) {
+      setGpsPositions({});
+      setGpsLoading(false);
+      setGpsUnavailable(false);
+      return;
+    }
+
+    const loadLatestPositions = async (showLoading: boolean) => {
+      if (showLoading) setGpsLoading(true);
+      let failedRequests = 0;
+      const entries = await Promise.all(boats.map(async (boat) => {
+        const boatId = boatIdOf(boat);
+        if (!boatId) {
+          failedRequests += 1;
+          return null;
+        }
+        try {
+          const position = normalizeGpsPosition(await getLatestPosition(boatId), boatId);
+          return position ? [boatId, position] as const : null;
+        } catch {
+          failedRequests += 1;
+          return null;
+        }
+      }));
+      if (cancelled) return;
+      setGpsPositions((current) => {
+        const next: Record<string, GpsPosition> = {};
+        entries.forEach((entry) => {
+          if (entry) next[entry[0]] = mergeGpsPosition(current[entry[0]], entry[1]);
+        });
+        return next;
+      });
+      setGpsUnavailable(failedRequests === boats.length);
+      setGpsLoading(false);
+    };
+
+    void loadLatestPositions(true);
+    const poll = window.setInterval(() => void loadLatestPositions(false), 60_000);
+    socket = io(getRealtimeOrigin(), { withCredentials: true, transports: ["websocket", "polling"] });
+    socket.on("position", (payload: unknown) => {
+      const position = normalizeGpsPosition(payload, "");
+      if (!position || !position.boatId || !boats.some((boat) => boatIdOf(boat) === position.boatId)) return;
+      setGpsPositions((current) => ({
+        ...current,
+        [position.boatId]: mergeGpsPosition(current[position.boatId], position),
+      }));
+      setGpsUnavailable(false);
+    });
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+      socket?.disconnect();
+    };
+  }, [boats, demo]);
 
   // Les données du serveur sont-elles arrivées ?
   const dataReady = cashMouvement.length > 0 || reservation.length > 0 || trip.length > 0;
@@ -668,10 +764,14 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     return () => { off = true; };
   }, []);
 
-  const boatsWithGps = boats.filter((b) => boatPos(b)).length;
-  const gpsIndex = selectedBoat ?? boats.findIndex((b) => boatPos(b));
-  const gpsBoat = gpsIndex >= 0 ? boats[gpsIndex] : null;
-  const gpsBoatPos = gpsBoat ? boatPos(gpsBoat) : null;
+  const gpsBoats = boats.flatMap((boat, index) => {
+    const position = gpsPositions[boatIdOf(boat)];
+    return position && isOnGpsMap(position) ? [{ boat, index, position }] : [];
+  });
+  const boatsWithGps = gpsBoats.length;
+  const selectedGpsBoat = gpsBoats.find(({ index }) => index === selectedBoat) ?? gpsBoats[0] ?? null;
+  const gpsBoat = selectedGpsBoat?.boat ?? null;
+  const gpsBoatPosition = selectedGpsBoat?.position ?? null;
   const updatedLabel = loadedAt.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 
   const dash = "—";
@@ -1117,30 +1217,20 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                 return (
                   <g key={c.n}>
                     <circle cx={x} cy={y} r={c.port ? 2.6 : 1.8} fill={c.port ? "#1255d6" : "#64748b"} />
-                    <text
-                      x={c.left ? x - 4 : x + 4}
-                      y={y + 2.5}
-                      fontSize="7"
-                      textAnchor={c.left ? "end" : "start"}
-                      fill="#10285e"
-                    >
+                    <text x={c.left ? x - 4 : x + 4} y={y + 2.5} fontSize="7" textAnchor={c.left ? "end" : "start"} fill="#10285e">
                       {c.n}
                     </text>
                   </g>
                 );
               })}
-              {boats.map((b, i) => {
-                const p = boatPos(b);
-                if (!p) return null;
-                const [x, y] = proj(p[0], p[1]);
-                const maint = isMaint(b);
+              {gpsBoats.map(({ boat, index, position }) => {
+                const [x, y] = proj(position.longitude, position.latitude);
+                const color = gpsMovementColor(position);
                 return (
-                  <g key={i} onClick={() => setSelectedBoat(i)} style={{ cursor: "pointer" }}>
-                    <circle cx={x} cy={y} r={6} fill={maint ? "#ef4444" : "#22c55e"} fillOpacity={0.25} />
-                    <circle cx={x} cy={y} r={3} fill={maint ? "#ef4444" : "#22c55e"} stroke="#fff" strokeWidth="1" />
-                    <text x={x + 6} y={y - 5} fontSize="7" fontWeight="700" fill="#10285e">
-                      {boatName(b)}
-                    </text>
+                  <g key={boatIdOf(boat) || index} onClick={() => setSelectedBoat(index)} style={{ cursor: "pointer" }}>
+                    <circle cx={x} cy={y} r={6} fill={color} fillOpacity={0.25} />
+                    <circle cx={x} cy={y} r={3} fill={color} stroke="#fff" strokeWidth="1" />
+                    <text x={x + 6} y={y - 5} fontSize="7" fontWeight="700" fill="#10285e">{boatName(boat)}</text>
                   </g>
                 );
               })}
@@ -1148,41 +1238,43 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                 <g>
                   <circle cx={120} cy={145} r={6} fill="#22c55e" fillOpacity={0.25} />
                   <circle cx={120} cy={145} r={3} fill="#22c55e" stroke="#fff" strokeWidth="1" />
-                  <text x={126} y={140} fontSize="7" fontWeight="700" fill="#10285e">
-                    Bateau Arcanum
-                  </text>
+                  <text x={126} y={140} fontSize="7" fontWeight="700" fill="#10285e">Bateau Arcanum</text>
                 </g>
               )}
             </svg>
             {demo && (
-              <div className="absolute right-2 bottom-2 bg-white rounded-lg shadow-md border border-[#dbe5f5] p-2 text-[10px] max-w-[150px]">
+              <div className="absolute right-2 bottom-2 bg-white rounded-lg shadow-md border border-[#dbe5f5] p-2 text-[10px] max-w-[170px]">
                 <p className="font-bold text-xs truncate">Bateau Arcanum</p>
-                <p className="font-semibold text-green-600">Vitesse : 12 nœuds</p>
-                <p className="text-gray-500">Dernière position : 22/10 14:12</p>
+                <p className="font-semibold text-blue-600">Donnée de démonstration</p>
+                <p className="text-gray-500">Position fictive, non GPS</p>
               </div>
             )}
-            {!demo && gpsBoat && (
-              <div className="absolute right-2 bottom-2 bg-white rounded-lg shadow-md border border-[#dbe5f5] p-2 text-[10px] max-w-[150px]">
+            {!demo && gpsBoat && gpsBoatPosition && (
+              <div className="absolute right-2 bottom-2 bg-white rounded-lg shadow-md border border-[#dbe5f5] p-2 text-[10px] max-w-[180px]">
                 <p className="font-bold text-xs truncate">{boatName(gpsBoat)}</p>
-                <p className={`font-semibold ${isMaint(gpsBoat) ? "text-orange-500" : "text-green-600"}`}>{boatState(gpsBoat)}</p>
-                {gpsBoatPos && (
-                  <p className="text-gray-500">Position : {gpsBoatPos[1].toFixed(2)} / {gpsBoatPos[0].toFixed(2)}</p>
-                )}
+                <p className="font-semibold" style={{ color: gpsMovementColor(gpsBoatPosition) }}>{gpsMovementLabel(gpsBoatPosition)}</p>
+                <p className="text-gray-600">Position : {gpsBoatPosition.latitude.toFixed(4)} / {gpsBoatPosition.longitude.toFixed(4)}</p>
+                <p className="text-gray-500">Dernière position : {gpsDateLabel(gpsBoatPosition.createdAt)}</p>
+                {typeof gpsBoatPosition.speed === "number" && <p className="text-gray-500">Vitesse : {gpsBoatPosition.speed.toFixed(1)} m/s</p>}
               </div>
             )}
-            {!demo && boatsWithGps === 0 && (
-              <p className="absolute left-2 bottom-2 text-[10px] text-gray-600 bg-white/80 rounded px-2 py-1">
-                Aucune position GPS enregistrée dans la base.
-              </p>
+            {!demo && gpsLoading && boatsWithGps === 0 && (
+              <p className="absolute left-2 bottom-2 text-[10px] text-gray-600 bg-white/80 rounded px-2 py-1">Chargement des positions GPS…</p>
+            )}
+            {!demo && !gpsLoading && gpsUnavailable && (
+              <p className="absolute left-2 bottom-2 text-[10px] text-red-700 bg-white/90 rounded px-2 py-1">Service GPS indisponible.</p>
+            )}
+            {!demo && !gpsLoading && !gpsUnavailable && boats.length > 0 && boatsWithGps === 0 && (
+              <p className="absolute left-2 bottom-2 text-[10px] text-gray-600 bg-white/80 rounded px-2 py-1">Aucune position GPS enregistrée dans la base.</p>
+            )}
+            {!demo && !gpsLoading && boats.length === 0 && (
+              <p className="absolute left-2 bottom-2 text-[10px] text-gray-600 bg-white/80 rounded px-2 py-1">Aucun bateau chargé.</p>
             )}
           </div>
-          <div className="flex gap-4 text-[10px] mt-2 justify-center">
-            <span className="flex items-center gap-1">
-              <i className="w-2 h-2 rounded-full bg-green-500 inline-block" /> Bateau en route
-            </span>
-            <span className="flex items-center gap-1">
-              <i className="w-2 h-2 rounded-full bg-red-500 inline-block" /> Bateau à l'arrêt
-            </span>
+          <div className="flex flex-wrap gap-4 text-[10px] mt-2 justify-center">
+            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-green-600 inline-block" /> En mouvement</span>
+            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> À l’arrêt</span>
+            <span className="flex items-center gap-1"><i className="w-2 h-2 rounded-full bg-blue-600 inline-block" /> Vitesse inconnue</span>
           </div>
         </div>
 

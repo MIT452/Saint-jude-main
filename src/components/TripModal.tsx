@@ -60,7 +60,7 @@ const TripModalUpdate: FC<TripModalUpdateProps> = ({ onClose, currentTrip }) => 
       from: tripState.from,
       status: tripState.status,
       to: tripState.to,
-      userId : currentUser ? currentUser.id : ''
+      userId: currentUser?.id || tripState.userId || currentTrip.userId,
     }
       const response = await onAddService(TABLE_DATA_BASE.TRIP, trip);
     
