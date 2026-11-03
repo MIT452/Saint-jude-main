@@ -10,8 +10,7 @@ import {
 import { useSelector } from "react-redux";
 import { RootState } from "../redux";
 import { onGetService } from "../data/service";
-import { AuditLog } from "../data/type";
-import { findUser } from "../Tools/Tools";
+import { AuditLog, User } from "../data/type";
 import { askAI } from "../data/auditAI";
 import { fetchAuditAlerts, fetchAuditLogs, reviewAuditAlert, verifyAuditChain } from "../data/auditApi";
 import type { ChainState, ServerAlert, ServerLog } from "../data/auditApi";
@@ -20,6 +19,7 @@ import AuditModal from "./AuditModal";
 type types = "Goods" | "User" | "Reservation" | "Trip" | "Boat" | "CashMovement" | "FuelConsumption";
 type Level = "Faible" | "Moyen" | "Élevé";
 type Risk = "Normal" | "Anomalie" | "Risque";
+type AuditUser = Pick<User, "id" | "name" | "lastName" | "email">;
 type Row = {
   log: AuditLog; date: Date; user: string; userId: string; entity: string; entityFr: string; act: string; actKey: string;
   ok: boolean; risk: Risk; ip: string; details: string; docId?: string;
@@ -141,6 +141,7 @@ const buildContext = (rows: Row[], alerts: AlertItem[]) => {
 
 const Audit: FC = () => {
   const [logs, setLogs] = useState<AuditLog[]>([]);
+  const [serverUsers, setServerUsers] = useState<AuditUser[]>([]);
   const [alerts, setAlerts] = useState<ServerAlert[]>([]);
   const [chain, setChain] = useState<ChainState | null | undefined>(undefined);
   const [source, setSource] = useState<"server" | "legacy">("server");
@@ -165,6 +166,20 @@ const Audit: FC = () => {
 
   const allUser = useSelector((state: RootState) => state.users.allUser);
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
+
+  useEffect(() => {
+    let cancelled = false;
+    void onGetService<Record<string, unknown>>("user").then((users) => {
+      if (cancelled) return;
+      setServerUsers(users.map((user) => ({
+        id: String(user.id ?? user._id ?? ""),
+        name: String(user.name ?? ""),
+        lastName: String(user.lastName ?? ""),
+        email: String(user.email ?? ""),
+      })).filter((user) => user.id && user.name));
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -200,9 +215,13 @@ const Audit: FC = () => {
     const base: Row[] = [...logs]
       .sort((a, b) => +parseDate(b.createdAt) - +parseDate(a.createdAt)) // plus récent d'abord
       .map((log) => {
-        const knownUsers = [...allUser, ...(currentUser ? [currentUser] : [])];
+        const knownUsers: AuditUser[] = [
+          ...allUser,
+          ...serverUsers,
+          ...(currentUser ? [currentUser] : []),
+        ];
         const rawU = log.userId
-          ? findUser(log.userId, knownUsers)
+          ? knownUsers.find((candidate) => String(candidate.id).trim() === String(log.userId).trim())
           : undefined;
         const actor = String((log as any).actor ?? "");
         const userByEmail = actor.includes("@") && !actor.includes("***")
@@ -239,7 +258,7 @@ const Audit: FC = () => {
       const risk: Risk = cnt >= 5 ? "Anomalie" : cnt >= 3 ? "Risque" : "Normal";
       return { ...r, risk };
     });
-  }, [logs, allUser]);
+  }, [logs, allUser, currentUser, serverUsers]);
 
   // ---------- Alertes : levées par les règles du backend (l'IA ne décide pas), regroupées par règle + IP
   const anomalies = useMemo<AlertItem[]>(() => {
