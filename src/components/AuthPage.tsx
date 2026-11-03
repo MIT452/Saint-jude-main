@@ -4,7 +4,7 @@ import { useDispatch } from "react-redux";
 import { AppDispatch } from "../redux";
 import { setCurrentUser } from "../redux/feature/users";
 import {
-  Anchor, ArrowRight, Bell, Bot, CalendarDays, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
+  Anchor, ArrowRight, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
   Ship, ShieldCheck, User, UserPlus, Users,
 } from "lucide-react";
 import { loginUser, registerUser } from "../data/service";
@@ -15,7 +15,7 @@ import type { Role } from "../data/service";
    Ex. : const LOGIN_PHOTO = "login-bg.jpg";  (puis ajouter public/images/login-bg.jpg) */
 const LOGIN_PHOTO = "";
 const REGISTER_PHOTO = "";
-const AINA_PHOTO = "";
+const REGISTER_IMAGE = "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1600&q=85";
 
 const BASE = (import.meta.env.BASE_URL as string | undefined) ?? "/";
 const photoUrl = (file: string) => `url(${BASE}images/${file})`;
@@ -23,10 +23,8 @@ const photoUrl = (file: string) => `url(${BASE}images/${file})`;
 const withPhoto = (file: string, fallback: string) => (file ? `${photoUrl(file)}, ${fallback}` : fallback);
 
 const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
-const AINA_SKY = "linear-gradient(160deg,#6fb4f2 0%,#2f86dd 100%)";
 const LOGIN_BG = withPhoto(LOGIN_PHOTO, SEA);
 const BANNER_BG = withPhoto(REGISTER_PHOTO, SEA);
-const AINA_BG = withPhoto(AINA_PHOTO, AINA_SKY);
 
 // Rôles proposés à l'inscription : Propriétaire, Admin, Gestionnaire.
 // Chaque rôle est protégé par un code d'accès vérifié côté serveur (voir backend).
@@ -166,14 +164,6 @@ const PwdField = ({ id, label, labelIcon, value, onChange, placeholder, autoComp
     </div>
   </div>
 );
-
-const BENEFITS: Array<[ReactNode, string, string]> = [
-  [<Ship size={26} key="a" />, "Réserver facilement", "Accédez aux disponibilités et réservez vos voyages."],
-  [<CalendarDays size={26} key="b" />, "Suivre vos réservations", "Consultez l'état de vos réservations en temps réel."],
-  [<Bell size={26} key="c" />, "Recevoir des notifications", "Soyez informé par e-mail ou WhatsApp des mises à jour importantes."],
-  [<Bot size={26} key="d" />, "Assistant IA", "Posez vos questions et obtenez des réponses rapides."],
-  [<ShieldCheck size={26} key="e" />, "Sécurité renforcée", "Votre compte est protégé et vos données restent privées."],
-];
 
 const AuthPage = () => {
   const dispatch = useDispatch<AppDispatch>();
@@ -460,32 +450,22 @@ const AuthPage = () => {
             </div>
           </form>
 
-          <div className="space-y-4">
+          <div className="relative min-h-[420px] lg:min-h-[680px] overflow-hidden rounded-2xl border border-white/60 bg-[#075985] shadow-lg">
+            <img
+              src={REGISTER_IMAGE}
+              alt="Bateau naviguant sur une mer turquoise"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-[#062c58]/85 via-[#075985]/10 to-[#087ca8]/20" />
             <div
-              className="relative h-[260px] rounded-2xl overflow-hidden shadow-lg"
-              style={{ backgroundImage: AINA_BG, backgroundSize: "cover", backgroundPosition: "center top" }}
-            >
-              <div className="absolute right-4 top-6 max-w-[55%] text-white text-xl -rotate-6 drop-shadow-md" style={script}>
-                Je suis Aina, votre assistant IA. Je suis là pour vous aider !
-              </div>
-            </div>
-
-            <div className="bg-white/80 rounded-2xl border border-[#dbe5f5] shadow-sm p-6">
-              <h2 className="text-xl font-bold text-[#0b3aa8] mb-4">Pourquoi créer un compte ?</h2>
-              <ul className="divide-y divide-[#e3eaf6]">
-                {BENEFITS.map(([icon, title, text]) => (
-                  <li key={title} className="flex items-start gap-4 py-3.5">
-                    <span className="w-14 h-14 rounded-full bg-[#dcebfb] text-[#1255d6] flex items-center justify-center shrink-0">{icon}</span>
-                    <div>
-                      <p className="font-semibold text-[#0b3aa8]">{title}</p>
-                      <p className="text-sm text-[#3e5788]">{text}</p>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-4 text-right text-[#1255d6] text-xl -rotate-3" style={script}>
-                Ensemble vers de « nouveaux horizons » <Anchor size={22} className="inline-block ml-1" />
-              </p>
+              aria-hidden="true"
+              className="absolute inset-x-0 top-0 h-36 bg-gradient-to-r from-[#37a5e8]/90 to-[#0b5db7]/80"
+              style={{ clipPath: "ellipse(86% 78% at 50% 0%)" }}
+            />
+            <div className="relative flex min-h-[420px] flex-col justify-end p-6 text-white lg:min-h-[680px]">
+              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100">SAINT-JUDE · Madagascar</p>
+              <h2 className="mt-2 max-w-sm text-3xl font-extrabold leading-tight">Relier les îles, rapprocher les hommes.</h2>
+              <p className="mt-2 text-sm text-white/85">Antalaha ↔ Toamasina</p>
             </div>
           </div>
         </div>
