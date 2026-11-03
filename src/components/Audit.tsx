@@ -199,7 +199,9 @@ const Audit: FC = () => {
     const base: Row[] = [...logs]
       .sort((a, b) => +parseDate(b.createdAt) - +parseDate(a.createdAt)) // plus récent d'abord
       .map((log) => {
-        const u = findUser(log.userId, allUser);
+        // findUser peut renvoyer un faux utilisateur « Inconnu » : on l'ignore pour retomber sur l'e-mail tenté
+        const rawU = log.userId ? findUser(log.userId, allUser) : undefined;
+        const u = rawU && rawU.name && String(rawU.name).toLowerCase() !== "inconnu" ? rawU : undefined;
         const entity = String(log.collectionName);
         const ok = (log as any).status !== "FAILED";
         const actKey = String(log.action);
