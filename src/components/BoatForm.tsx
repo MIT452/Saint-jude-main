@@ -35,7 +35,7 @@ const Label = ({ icon, text, required }: { icon: ReactNode; text: string; requir
   </label>
 );
 
-const BoatForm: FC = () => {
+const BoatForm: FC<{ onClose?: () => void }> = ({ onClose }) => {
   const dispatch = useDispatch();
   const { allUser, currentUser } = useSelector((state: RootState) => state.users);
   const capitaines = allUser.filter(({ role }) => role === "Capitaine");
@@ -97,6 +97,7 @@ const BoatForm: FC = () => {
         dispatch(setBoats(newBoat));
         toast.success("Bateau ajouté avec succès !");
         reset();
+        onClose?.();
       } else {
         toast.error("Erreur lors de l'ajout du bateau.");
       }
