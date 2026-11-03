@@ -26,6 +26,12 @@ type Row = {
 };
 // Une alerte affichée = plusieurs alertes serveur identiques regroupées (même règle + même IP)
 type AlertItem = { id: string; ids: string[]; n: number; t: string; s: string; h: string; lvl: Level };
+// Le serveur joint maintenant le nom de l'utilisateur à chaque log
+type ServerLogWithUser = ServerLog & {
+  user_name?: string | null;
+  user_last_name?: string | null;
+  user_email?: string | null;
+};
 
 const PAGE = 8;
 const DAY = 86400000;
@@ -115,8 +121,11 @@ const describe = (l: ServerLog): string => {
 };
 
 // Convertit une entrée du journal sécurisé au format attendu par la page
-const toAuditLog = (l: ServerLog): AuditLog =>
-  ({
+const toAuditLog = (raw: ServerLog): AuditLog => {
+  const l = raw as ServerLogWithUser;
+  // Nom réel fourni par le serveur (JOIN sur la table "user")
+  const userName = [l.user_name, l.user_last_name].filter(Boolean).join(" ").trim();
+  return ({
     _id: String(l.id),
     createdAt: l.created_at,
     userId: l.user_id ?? "",
@@ -127,10 +136,14 @@ const toAuditLog = (l: ServerLog): AuditLog =>
     ip: l.ip_address ?? "—",
     details: describe(l),
     serverStatus: l.status,
+    userName: userName || undefined,
     // Connexion réussie / action d'un compte : e-mail complet. Échec : e-mail tenté, masqué.
-    actor: l.details?.email ? (l.result === "FAILURE" ? maskEmail(l.details.email) : l.details.email) : undefined,
+    actor: l.details?.email
+      ? (l.result === "FAILURE" ? maskEmail(l.details.email) : l.details.email)
+      : l.user_email ?? undefined,
     after: l.resource_id ? { id: l.resource_id } : undefined,
   }) as unknown as AuditLog;
+};
 
 // Contexte envoyé à l'IA : elle résume, elle ne décide pas
 const buildContext = (rows: Row[], alerts: AlertItem[]) => {
@@ -228,6 +241,8 @@ const Audit: FC = () => {
           ? knownUsers.find((candidate) => candidate.email?.toLowerCase() === actor.toLowerCase())
           : undefined;
         const u = rawU?.name && rawU.name.toLowerCase() !== "inconnu" ? rawU : userByEmail;
+        // Nom envoyé par le serveur (JOIN) : source la plus fiable
+        const serverName = String((log as any).userName ?? "").trim();
         const entity = String(log.collectionName);
         const ok = (log as any).status !== "FAILED";
         const actKey = String(log.action);
@@ -240,7 +255,7 @@ const Audit: FC = () => {
         return {
           log, entity, entityFr, act, actKey, ok, risk,
           date: parseDate(log.createdAt),
-          user: u ? `${u.name} ${u.lastName}` : actor || (log.userId ? `ID ${String(log.userId).slice(0, 8)}` : "Non identifié"),
+          user: serverName || (u ? `${u.name} ${u.lastName}` : actor || (log.userId ? `ID ${String(log.userId).slice(0, 8)}` : "Non identifié")),
           userId: String(log.userId),
           ip: (log as any).ip ?? (log as any).ipAddress ?? "—",
           details: (log as any).details ?? `${act.charAt(0) + act.slice(1).toLowerCase()} — ${entityFr}`,
