@@ -127,7 +127,8 @@ const toAuditLog = (l: ServerLog): AuditLog =>
     ip: l.ip_address ?? "—",
     details: describe(l),
     serverStatus: l.status,
-    actor: l.details?.email ? maskEmail(l.details.email) : undefined,
+    // Connexion réussie / action d'un compte : e-mail complet. Échec : e-mail tenté, masqué.
+    actor: l.details?.email ? (l.result === "FAILURE" ? maskEmail(l.details.email) : l.details.email) : undefined,
     after: l.resource_id ? { id: l.resource_id } : undefined,
   }) as unknown as AuditLog;
 
@@ -199,9 +200,15 @@ const Audit: FC = () => {
     const base: Row[] = [...logs]
       .sort((a, b) => +parseDate(b.createdAt) - +parseDate(a.createdAt)) // plus récent d'abord
       .map((log) => {
-        // findUser peut renvoyer un faux utilisateur « Inconnu » : on l'ignore pour retomber sur l'e-mail tenté
-        const rawU = log.userId ? findUser(log.userId, allUser) : undefined;
-        const u = rawU && rawU.name && String(rawU.name).toLowerCase() !== "inconnu" ? rawU : undefined;
+        const knownUsers = [...allUser, ...(currentUser ? [currentUser] : [])];
+        const rawU = log.userId
+          ? findUser(log.userId, knownUsers)
+          : undefined;
+        const actor = String((log as any).actor ?? "");
+        const userByEmail = actor.includes("@") && !actor.includes("***")
+          ? knownUsers.find((candidate) => candidate.email?.toLowerCase() === actor.toLowerCase())
+          : undefined;
+        const u = rawU?.name && rawU.name.toLowerCase() !== "inconnu" ? rawU : userByEmail;
         const entity = String(log.collectionName);
         const ok = (log as any).status !== "FAILED";
         const actKey = String(log.action);
@@ -214,7 +221,7 @@ const Audit: FC = () => {
         return {
           log, entity, entityFr, act, actKey, ok, risk,
           date: parseDate(log.createdAt),
-          user: u ? `${u.name} ${u.lastName}` : ((log as any).actor ?? "Inconnu"),
+          user: u ? `${u.name} ${u.lastName}` : actor || (log.userId ? `ID ${String(log.userId).slice(0, 8)}` : "Non identifié"),
           userId: String(log.userId),
           ip: (log as any).ip ?? (log as any).ipAddress ?? "—",
           details: (log as any).details ?? `${act.charAt(0) + act.slice(1).toLowerCase()} — ${entityFr}`,

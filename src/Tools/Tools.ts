@@ -19,7 +19,8 @@ import { fr } from "date-fns/locale";
 const reservationVoid = reservationVoids;
 
 export const findUser = (idUser: string, allUser: User[]) => {
-  const user = allUser.find((u) => u.id === idUser);
+  const normalizedId = String(idUser ?? "").trim();
+  const user = allUser.find((u) => String(u.id ?? (u as User & { _id?: string })._id ?? "").trim() === normalizedId);
   return user ? user : userVoid;
 };
 
