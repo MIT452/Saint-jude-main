@@ -24,13 +24,31 @@ type Row = {
   log: AuditLog; date: Date; user: string; userId: string; entity: string; entityFr: string; act: string; actKey: string;
   ok: boolean; risk: Risk; ip: string; details: string; docId?: string;
 };
-type AlertItem = { id: string; t: string; s: string; h: string; lvl: Level };
+// Une alerte affichée = plusieurs alertes serveur identiques regroupées (même règle + même IP)
+type AlertItem = { id: string; ids: string[]; n: number; t: string; s: string; h: string; lvl: Level };
 
 const PAGE = 8;
 const DAY = 86400000;
+const FAIL_WINDOW = 10 * 60 * 1000; // fenêtre de comptage des échecs de connexion (10 min)
 const PIE_COLORS = ["#2563eb", "#10b981", "#f59e0b", "#8b5cf6", "#ef4444", "#94a3b8"];
 const pad = (n: number) => String(n).padStart(2, "0");
 const fmtDate = (d: Date) => `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
+// Date robuste : une date ISO sans fuseau est considérée comme UTC (évite les décalages et les tris faux)
+const parseDate = (s: unknown): Date => {
+  const v = String(s ?? "").trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(v) && !/(Z|[+-]\d{2}:?\d{2})$/i.test(v)) return new Date(v.replace(" ", "T") + "Z");
+  return new Date(v);
+};
+
+// Masque l'e-mail tenté : to***@email.com
+const maskEmail = (e?: string): string => {
+  if (!e) return "Inconnu";
+  const [local, domain] = e.split("@");
+  if (!domain) return e.length > 3 ? `${e.slice(0, 2)}***` : "***";
+  return `${local.slice(0, 2)}***@${domain}`;
+};
+
 const ACTION: Record<string, string> = {
   create: "CRÉATION", update: "MODIFICATION", delete: "SUPPRESSION", login: "CONNEXION", login_failed: "ÉCHEC DE CONNEXION",
 };
@@ -83,11 +101,11 @@ const ago = (d: Date) => {
 };
 const trend = (cur: number, prev: number) => (prev > 0 ? Math.round(((cur - prev) / prev) * 100) : null);
 
-// Texte lisible pour une entrée du journal sécurisé
+// Texte lisible pour une entrée du journal sécurisé (l'e-mail tenté est masqué)
 const describe = (l: ServerLog): string => {
   const d = l.details;
   if (l.action === "LOGIN") return "Connexion réussie";
-  if (l.action === "LOGIN_FAILED") return `Échec de connexion${d?.email ? ` (${d.email})` : ""}`;
+  if (l.action === "LOGIN_FAILED") return `Échec de connexion${d?.email ? ` (${maskEmail(d.email)})` : ""}`;
   if (d?.event === "register") return "Inscription d'un nouvel utilisateur";
   if (d?.event === "change-password") return "Changement de mot de passe";
   const label = ACTION[l.action.toLowerCase()] ?? l.action;
@@ -109,14 +127,14 @@ const toAuditLog = (l: ServerLog): AuditLog =>
     ip: l.ip_address ?? "—",
     details: describe(l),
     serverStatus: l.status,
-    actor: l.details?.email,
+    actor: l.details?.email ? maskEmail(l.details.email) : undefined,
     after: l.resource_id ? { id: l.resource_id } : undefined,
   }) as unknown as AuditLog;
 
 // Contexte envoyé à l'IA : elle résume, elle ne décide pas
 const buildContext = (rows: Row[], alerts: AlertItem[]) => {
   const lines = rows.slice(0, 40).map((r) => `${r.date.toISOString().slice(0, 16)} | ${r.user} | ${r.act} | ${r.entityFr} | ${r.ok ? "Succès" : "Échec"} | IP ${r.ip}`);
-  const alertLines = alerts.slice(0, 10).map((a) => `${a.t} (${a.lvl})`).join("; ") || "aucune";
+  const alertLines = alerts.slice(0, 10).map((a) => `${a.t}${a.n > 1 ? ` x${a.n}` : ""} (${a.lvl})`).join("; ") || "aucune";
   return `Journaux d'audit SAINT-JUDE (transport maritime). Total: ${rows.length}, échecs: ${rows.filter((r) => !r.ok).length}, suppressions: ${rows.filter((r) => r.actKey === "delete").length}.\nAlertes levées par les règles de détection (${alerts.length}): ${alertLines}\nDerniers événements (date | utilisateur | action | ressource | résultat | IP):\n${lines.join("\n")}`;
 };
 
@@ -177,55 +195,83 @@ const Audit: FC = () => {
     void load();
   }, [load, refresh]);
 
-  const rows = useMemo<Row[]>(
-    () =>
-      [...logs]
-        .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
-        .map((log) => {
-          const u = findUser(log.userId, allUser);
-          const entity = String(log.collectionName);
-          const ok = (log as any).status !== "FAILED";
-          const actKey = String(log.action);
-          const act = ACTION[actKey] ?? actKey.toUpperCase();
-          const entityFr = ENTITY_FR[entity] ?? entity.toLowerCase();
-          const serverStatus = (log as any).serverStatus as string | undefined;
-          const risk: Risk = serverStatus
-            ? serverStatus === "CRITIQUE" ? "Anomalie" : serverStatus === "SUSPECT" ? "Risque" : "Normal"
-            : !ok ? "Risque" : actKey === "delete" ? "Anomalie" : "Normal";
-          return {
-            log, entity, entityFr, act, actKey, ok, risk,
-            date: new Date(log.createdAt),
-            user: u ? `${u.name} ${u.lastName}` : ((log as any).actor ?? "system"),
-            userId: String(log.userId),
-            ip: (log as any).ip ?? (log as any).ipAddress ?? "—",
-            details: (log as any).details ?? `${act.charAt(0) + act.slice(1).toLowerCase()} — ${entityFr}`,
-            docId: MODAL_ENTITIES.includes(entity) ? (log as any).after?.id : undefined,
-          };
-        }),
-    [logs, allUser]
-  );
+  const rows = useMemo<Row[]>(() => {
+    const base: Row[] = [...logs]
+      .sort((a, b) => +parseDate(b.createdAt) - +parseDate(a.createdAt)) // plus récent d'abord
+      .map((log) => {
+        const u = findUser(log.userId, allUser);
+        const entity = String(log.collectionName);
+        const ok = (log as any).status !== "FAILED";
+        const actKey = String(log.action);
+        const act = ACTION[actKey] ?? actKey.toUpperCase();
+        const entityFr = ENTITY_FR[entity] ?? entity.toLowerCase();
+        const serverStatus = (log as any).serverStatus as string | undefined;
+        const risk: Risk = serverStatus
+          ? serverStatus === "CRITIQUE" ? "Anomalie" : serverStatus === "SUSPECT" ? "Risque" : "Normal"
+          : !ok ? "Risque" : actKey === "delete" ? "Anomalie" : "Normal";
+        return {
+          log, entity, entityFr, act, actKey, ok, risk,
+          date: parseDate(log.createdAt),
+          user: u ? `${u.name} ${u.lastName}` : ((log as any).actor ?? "Inconnu"),
+          userId: String(log.userId),
+          ip: (log as any).ip ?? (log as any).ipAddress ?? "—",
+          details: (log as any).details ?? `${act.charAt(0) + act.slice(1).toLowerCase()} — ${entityFr}`,
+          docId: MODAL_ENTITIES.includes(entity) ? (log as any).after?.id : undefined,
+        };
+      });
 
-  // ---------- Alertes : levées par les règles du backend (l'IA ne décide pas)
-  const anomalies = useMemo<AlertItem[]>(
-    () =>
-      alerts.map((a) => ({
-        id: String(a.id),
-        t: RULE_LABEL[a.rule] ?? a.rule,
-        s: `${ENTITY_FR[RESOURCE_TO_ENTITY[a.resource] ?? a.resource] ?? a.resource} · IP ${a.ip_address ?? "—"}`,
-        h: ago(new Date(a.created_at)),
-        lvl: (a.severity === "CRITIQUE" ? "Élevé" : "Moyen") as Level,
-      })),
-    [alerts]
-  );
+    // Statut cohérent pour les échecs de connexion : on compte les échecs de la même IP sur 10 min
+    // 1-2 = Normal, 3-4 = Risque, 5 et plus = Anomalie
+    const fails = base.filter((r) => r.actKey === "login_failed");
+    return base.map((r) => {
+      if (r.actKey !== "login_failed") return r;
+      const t = r.date.getTime();
+      const cnt = fails.filter((f) => f.ip === r.ip && f.date.getTime() <= t && t - f.date.getTime() <= FAIL_WINDOW).length;
+      const risk: Risk = cnt >= 5 ? "Anomalie" : cnt >= 3 ? "Risque" : "Normal";
+      return { ...r, risk };
+    });
+  }, [logs, allUser]);
 
-  const onReview = async (id: string, falsePositive: boolean) => {
+  // ---------- Alertes : levées par les règles du backend (l'IA ne décide pas), regroupées par règle + IP
+  const anomalies = useMemo<AlertItem[]>(() => {
+    const groups = new Map<string, AlertItem & { ts: number }>();
+    alerts.forEach((a) => {
+      const key = `${a.rule}|${a.ip_address ?? "—"}|${a.resource}`;
+      const ts = parseDate(a.created_at).getTime();
+      const lvl: Level = a.severity === "CRITIQUE" ? "Élevé" : "Moyen";
+      const g = groups.get(key);
+      if (g) {
+        g.ids.push(String(a.id));
+        g.n += 1;
+        if (lvl === "Élevé") g.lvl = "Élevé";
+        if (ts > g.ts) { g.ts = ts; g.h = ago(new Date(ts)); }
+      } else {
+        groups.set(key, {
+          id: String(a.id), ids: [String(a.id)], n: 1, ts,
+          t: RULE_LABEL[a.rule] ?? a.rule,
+          s: `${ENTITY_FR[RESOURCE_TO_ENTITY[a.resource] ?? a.resource] ?? a.resource} · IP ${a.ip_address ?? "—"}`,
+          h: ago(new Date(ts)), lvl,
+        });
+      }
+    });
+    return [...groups.values()].sort((a, b) => b.ts - a.ts);
+  }, [alerts]);
+
+  const onReview = async (ids: string[], falsePositive: boolean) => {
     try {
-      await reviewAuditAlert(id, falsePositive);
-      setAlerts((prev) => prev.filter((a) => String(a.id) !== id));
+      await Promise.all(ids.map((id) => reviewAuditAlert(id, falsePositive)));
+      setAlerts((prev) => prev.filter((a) => !ids.includes(String(a.id))));
     } catch (e) {
       console.error("Revue de l'alerte impossible", e);
     }
   };
+
+  // IP les plus suspectes (échecs de connexion)
+  const topIps = useMemo(() => {
+    const map = new Map<string, number>();
+    rows.filter((r) => !r.ok && r.ip !== "—").forEach((r) => map.set(r.ip, (map.get(r.ip) ?? 0) + 1));
+    return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3);
+  }, [rows]);
 
   // ---------- Statistiques réelles
   const now = Date.now();
@@ -261,14 +307,18 @@ const Audit: FC = () => {
     return days;
   }, [rows]);
 
+  // Répartition par type d'action (Connexion, Échec de connexion, Création…)
   const pie = useMemo(() => {
     const map = new Map<string, number>();
-    rows.forEach((r) => map.set(r.entityFr, (map.get(r.entityFr) ?? 0) + 1));
+    rows.forEach((r) => {
+      const name = r.act.charAt(0) + r.act.slice(1).toLowerCase();
+      map.set(name, (map.get(name) ?? 0) + 1);
+    });
     const sorted = [...map.entries()].sort((a, b) => b[1] - a[1]);
     const top = sorted.slice(0, 5);
     const others = sorted.slice(5).reduce((s, [, v]) => s + v, 0);
-    if (others) top.push(["autres", others]);
-    return top.map(([name, value], i) => ({ name: name.charAt(0).toUpperCase() + name.slice(1), value, color: PIE_COLORS[i % PIE_COLORS.length], pct: Math.round((value / rows.length) * 100) }));
+    if (others) top.push(["Autres", others]);
+    return top.map(([name, value], i) => ({ name, value, color: PIE_COLORS[i % PIE_COLORS.length], pct: Math.round((value / rows.length) * 100) }));
   }, [rows]);
 
   const critical = useMemo(() => rows.filter((r) => r.risk !== "Normal").slice(0, 5), [rows]);
@@ -356,7 +406,7 @@ const Audit: FC = () => {
         </div>
         <div className="relative w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
           <Bell size={18} />
-          {anomalies.length > 0 && <span className="absolute -top-1 -right-1 bg-[#e5342f] text-white text-[10px] w-4 h-4 rounded-full flex items-center justify-center">{anomalies.length}</span>}
+          {anomalies.length > 0 && <span className="absolute -top-1 -right-1 bg-[#e5342f] text-white text-[10px] min-w-4 h-4 px-1 rounded-full flex items-center justify-center">{anomalies.length}</span>}
         </div>
         <div className="flex items-center gap-2 bg-white border border-[#dbe5f5] rounded-full pl-1 pr-3 py-1">
           <div className="w-8 h-8 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={18} /></div>
@@ -463,12 +513,28 @@ const Audit: FC = () => {
           </div>
           <div className="mt-3 bg-[#eef4ff] rounded-lg p-3 text-[11px]">
             <p className="font-bold text-xs">{anomalies.length ? `${anomalies.length} alerte(s) à examiner` : "Aucune alerte à examiner"}</p>
-            {anomalies.slice(0, 2).map((a) => <p key={a.id} className="text-gray-700">{a.t}</p>)}
+            {anomalies.slice(0, 2).map((a) => <p key={a.id} className="text-gray-700">{a.t}{a.n > 1 ? ` (×${a.n})` : ""}</p>)}
           </div>
           <div className="grid grid-cols-[1.3fr_1fr] gap-2 mt-3">
             <button onClick={genReport} className="bg-[#1255d6] text-white text-xs font-semibold py-2 rounded-md flex items-center justify-center gap-1"><Brain size={14} /> Voir le rapport IA</button>
             <button onClick={() => setShowParams((v) => !v)} className="border border-[#cfdcf3] text-xs py-2 rounded-md flex items-center justify-center gap-1"><Settings2 size={14} /> Paramètres</button>
           </div>
+
+          {/* IP les plus suspectes */}
+          <div className="mt-3 text-[11px]">
+            <p className="font-semibold text-xs mb-1">IP les plus suspectes</p>
+            {topIps.length === 0 ? <p className="text-gray-500">Aucune IP suspecte.</p> : (
+              <ul className="space-y-1">
+                {topIps.map(([ip, n]) => (
+                  <li key={ip} className="flex items-center justify-between bg-[#fff5f5] border border-[#f3cfcf] rounded px-2 py-1">
+                    <span className="font-mono">{ip}</span>
+                    <span className="text-[#d02925] font-semibold">{n} échec(s)</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
           {showParams && (
             <div className="absolute right-3 top-full mt-1 z-20 w-72 bg-white border border-[#cfdcf3] rounded-lg shadow-lg p-3 text-[11px] space-y-2">
               <p><b>Source :</b> {source === "server" ? "journal d'audit sécurisé (chaîne SHA-256)" : "ancien journal"}</p>
@@ -555,11 +621,11 @@ const Audit: FC = () => {
                 <li key={a.id} className="flex gap-2 text-[11px] items-start">
                   <ShieldAlert size={18} className={lvlIcon[a.lvl]} />
                   <div className="flex-1">
-                    <p className="font-semibold">{a.t}</p>
+                    <p className="font-semibold">{a.t}{a.n > 1 && <span className="ml-1 text-[#d02925]">×{a.n}</span>}</p>
                     <p className="text-gray-500">{a.s}</p>
                     <div className="flex gap-1 mt-1">
-                      <button onClick={() => onReview(a.id, false)} className="text-[10px] border border-[#cfdcf3] rounded px-1.5 py-0.5 hover:bg-blue-50">Examinée</button>
-                      <button onClick={() => onReview(a.id, true)} className="text-[10px] border border-[#f3cfcf] text-[#d02925] rounded px-1.5 py-0.5 hover:bg-red-50">Faux positif</button>
+                      <button onClick={() => onReview(a.ids, false)} className="text-[10px] border border-[#cfdcf3] rounded px-1.5 py-0.5 hover:bg-blue-50">Examinée</button>
+                      <button onClick={() => onReview(a.ids, true)} className="text-[10px] border border-[#f3cfcf] text-[#d02925] rounded px-1.5 py-0.5 hover:bg-red-50">Faux positif</button>
                     </div>
                   </div>
                   <div className="text-right"><span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold ${lvlBadge[a.lvl]}`}>{a.lvl === "Élevé" ? "Critique" : a.lvl}</span><p className="text-[9px] text-gray-400 mt-0.5">{a.h}</p></div>
