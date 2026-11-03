@@ -1,4 +1,4 @@
-import { FC, useRef, useState } from "react";
+import { FC, useEffect, useRef, useState } from "react";
 import type { DragEvent, ChangeEvent, FormEvent, ReactNode } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import { toast } from "react-toastify";
@@ -35,7 +35,12 @@ const Label = ({ icon, text, required }: { icon: ReactNode; text: string; requir
   </label>
 );
 
-const BoatForm: FC = () => {
+interface BoatFormProps {
+  /** Ferme la fenêtre (appelée après un ajout réussi, sur Échap, et via le bouton de fermeture). */
+  onClose: () => void;
+}
+
+const BoatForm: FC<BoatFormProps> = ({ onClose }) => {
   const dispatch = useDispatch();
   const { allUser, currentUser } = useSelector((state: RootState) => state.users);
   const capitaines = allUser.filter(({ role }) => role === "Capitaine");
@@ -63,6 +68,13 @@ const BoatForm: FC = () => {
   const onDrop = (e: DragEvent<HTMLDivElement>) => { e.preventDefault(); setDrag(false); readFile(e.dataTransfer.files?.[0]); };
 
   // CORRIGÉ : retour à « Disponible »
+  // Échap ferme la fenêtre
+  useEffect(() => {
+    const surTouche = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", surTouche);
+    return () => window.removeEventListener("keydown", surTouche);
+  }, [onClose]);
+
   const reset = () => { setId(""); setName(""); setCapacity(""); setImage(undefined); setState(DEFAULT_STATE); setCaptain(""); setDescription(""); };
 
   const onSubmit = async (e: FormEvent) => {
@@ -97,6 +109,7 @@ const BoatForm: FC = () => {
         dispatch(setBoats(newBoat));
         toast.success("Bateau ajouté avec succès !");
         reset();
+        onClose();
       } else {
         toast.error("Erreur lors de l'ajout du bateau.");
       }
@@ -112,7 +125,23 @@ const BoatForm: FC = () => {
   const input = "w-full h-12 border border-[#d3def2] rounded-lg bg-white px-4 text-sm text-[#10285e] placeholder:text-gray-400 outline-none focus:border-[#1255d6]";
 
   return (
-    <div className="bg-[#f3f7fd] min-h-full text-[#10285e]">
+    <div
+      className="fixed inset-0 z-50 overflow-y-auto bg-black/50 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Ajouter un bateau"
+      onClick={onClose}
+    >
+    <div className="relative mx-auto my-4 w-full max-w-[1100px] overflow-hidden rounded-xl bg-[#f3f7fd] text-[#10285e] shadow-2xl" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Fermer"
+        title="Fermer"
+        className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-white/90 text-[#1255d6] shadow hover:bg-white"
+      >
+        <X size={18} />
+      </button>
       {/* Barre du haut */}
       <div className="bg-white border-b border-[#e3eaf6] px-5 py-3 flex flex-wrap items-center gap-4">
         <div className="relative flex-1 min-w-[260px] max-w-[500px]">
@@ -230,6 +259,7 @@ const BoatForm: FC = () => {
           </div>
         </form>
       </div>
+    </div>
     </div>
   );
 };
