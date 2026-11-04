@@ -15,7 +15,7 @@ import { io, type Socket } from "socket.io-client";
 import { RootState } from "../redux";
 import { formatCurrency } from "../Tools/Tools";
 import { askAIJson } from "../data/auditAI";
-import { getLatestPosition, getRealtimeOrigin } from "../data/intelligenceService";
+import { getLatestPositions, getRealtimeOrigin } from "../data/intelligenceService";
 
 interface PropsDashboard {
   onSetToAudit: (value: string) => void;
@@ -382,31 +382,25 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
 
     const loadLatestPositions = async (showLoading: boolean) => {
       if (showLoading) setGpsLoading(true);
-      let failedRequests = 0;
-      const entries = await Promise.all(boats.map(async (boat) => {
-        const boatId = boatIdOf(boat);
-        if (!boatId) {
-          failedRequests += 1;
-          return null;
-        }
-        try {
-          const position = normalizeGpsPosition(await getLatestPosition(boatId), boatId);
-          return position ? [boatId, position] as const : null;
-        } catch {
-          failedRequests += 1;
-          return null;
-        }
-      }));
-      if (cancelled) return;
-      setGpsPositions((current) => {
-        const next: Record<string, GpsPosition> = {};
-        entries.forEach((entry) => {
-          if (entry) next[entry[0]] = mergeGpsPosition(current[entry[0]], entry[1]);
+      const ids = boats.map(boatIdOf).filter(Boolean);
+      try {
+        // Un seul appel : un bateau sans position est simplement absent de la réponse
+        const rows = await getLatestPositions(ids);
+        if (cancelled) return;
+        setGpsPositions((current) => {
+          const next: Record<string, GpsPosition> = {};
+          (Array.isArray(rows) ? rows : []).forEach((row) => {
+            const position = normalizeGpsPosition(row, row.boatId);
+            if (position) next[position.boatId] = mergeGpsPosition(current[position.boatId], position);
+          });
+          return next;
         });
-        return next;
-      });
-      setGpsUnavailable(failedRequests === boats.length);
-      setGpsLoading(false);
+        setGpsUnavailable(false);
+      } catch {
+        if (cancelled) return;
+        setGpsUnavailable(true);
+      }
+      if (!cancelled) setGpsLoading(false);
     };
 
     void loadLatestPositions(true);
@@ -457,7 +451,8 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const paid = reservation.reduce((a, r) => a + Number(r.amountPaid || 0), 0);
   const unpaid = reservation.reduce((a, r) => a + Number(r.amountToPay || 0), 0);
   const payTotal = paid + unpaid;
-  const payRate = payTotal ? Math.round((paid / payTotal) * 100) : null;
+  const payRate = payTotal ? Math.round((paid / payTotal) * 1000) / 10 : null;
+  const fmtRate = (v: number) => `${v.toLocaleString("fr-FR", { maximumFractionDigits: 1 })}%`;
   const cancelled = reservation.filter(isCancelled).length;
   const unpaidCount = reservation.filter((r) => Number(r.amountToPay) > 0).length;
 
@@ -473,8 +468,11 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
     ? series.reduce((b, d) => (d.revenus > b.revenus ? d : b), series[0])
     : null;
   const hasResSeries = series.some((d) => d.reservations > 0);
-  const caTrend = trendOf(monthly.map((d) => d.revenus));
-  const resTrend = trendOf(monthly.map((d) => d.reservations));
+  // Le dernier point de la série mensuelle est le mois EN COURS (incomplet) : on ne le compare jamais
+  // à un mois complet (sinon « −100 % » en début de mois). Pas de pourcentage si le mois de base est vide.
+  const completeMonths = monthly.slice(0, -1);
+  const caTrend = trendOf(completeMonths.map((d) => d.revenus));
+  const resTrend = trendOf(completeMonths.map((d) => d.reservations));
 
   // Prévisions (régression linéaire sur les séries réelles)
   const forecast = useMemo(() => makeForecast(series, "revenus"), [series]);
@@ -781,7 +779,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     {
       title: "Chiffre d'affaires total",
       value: dataReady ? formatCurrency(totalCredit) : dash,
-      sub: "vs mois précédent",
+      sub: "Encaissé en caisse (paiements reçus)",
       icon: TrendingUp,
       bg: "bg-[#0f9d78]",
       trend: dataReady ? caTrend : null,
@@ -789,7 +787,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     {
       title: "Total des dépenses",
       value: dataReady ? formatCurrency(totalDebit) : dash,
-      sub: "vs mois précédent",
+      sub: "Débits enregistrés en caisse",
       icon: Wallet,
       bg: "bg-[#ef4444]",
       trend: null,
@@ -797,7 +795,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     {
       title: "Réservations totales",
       value: dataReady ? String(reservation.length) : dash,
-      sub: "vs mois précédent",
+      sub: "Toutes périodes confondues",
       icon: CalendarDays,
       bg: "bg-[#7c3aed]",
       trend: dataReady ? resTrend : null,
@@ -812,8 +810,8 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
     },
     {
       title: "Taux de paiement",
-      value: dataReady && payRate != null ? `${payRate}%` : dash,
-      sub: "",
+      value: dataReady && payRate != null ? fmtRate(payRate) : dash,
+      sub: "Montant payé ÷ montant total",
       icon: CreditCard,
       bg: "bg-[#f59e0b]",
       trend: null,
@@ -868,7 +866,7 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
       confidence: exact,
     },
     "Taux de paiement": {
-      title: "Taux de paiement", value: dataReady && payRate != null ? `${payRate}%` : dash, period: "Toutes les réservations",
+      title: "Taux de paiement", value: dataReady && payRate != null ? fmtRate(payRate) : dash, period: "Toutes les réservations",
       formula: "Montant payé ÷ (montant payé + reste à payer), d'après amountPaid et amountToPay",
       sources: `${reservation.length} réservation(s)`,
       factors: [`${formatCurrency(paid)} déjà encaissé(s)`, `${formatCurrency(unpaid)} restant dû`, `${resStats.impayes} réservation(s) sans aucun paiement`],
@@ -1321,7 +1319,9 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                   <p>
                     {seaRisk
                       ? "Prudence : vent fort ou mer agitée, adaptez les départs."
-                      : "Les conditions sont favorables pour la navigation sur la ligne Toamasina."}
+                      : /pluie|orage/i.test(weather.label)
+                        ? "Pluie : visibilité réduite, vérifiez les consignes avant l'appareillage."
+                        : "Aucune contrainte météo détectée pour la navigation sur la ligne Toamasina."}
                   </p>
                   <a href="https://open-meteo.com/en/docs/marine-weather-api" target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 font-semibold underline">
                     Voir détails météo <ArrowRight size={10} />
@@ -1420,8 +1420,8 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                     <YAxis tick={{ fontSize: 9 }} allowDecimals={false} />
                     <RechartsTooltip />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
-                    <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
+                    <Area type="linear" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
+                    <Area type="linear" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : emptyChart)}
@@ -1433,8 +1433,8 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
                     <YAxis tick={{ fontSize: 9 }} tickFormatter={(v: number) => compact(v)} />
                     <RechartsTooltip formatter={(v: number | string, name: string) => [formatCurrency(Number(v)), name]} />
                     <Legend wrapperStyle={{ fontSize: 10 }} />
-                    <Area type="monotone" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
-                    <Area type="monotone" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
+                    <Area type="linear" dataKey="reel" stroke="#1d6fe0" strokeWidth={2} fill="#1d6fe0" fillOpacity={0.15} name="Réel" />
+                    <Area type="linear" dataKey="prevision" stroke="#7c3aed" strokeWidth={2} strokeDasharray="4 3" fill="#7c3aed" fillOpacity={0.08} name="Prévision" />
                   </AreaChart>
                 </ResponsiveContainer>
               ) : emptyChart)}

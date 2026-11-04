@@ -100,6 +100,21 @@ export const getLatestPosition = async (boatId: string) => {
   return data;
 };
 
+/** Dernière position de plusieurs bateaux en un seul appel (un bateau sans position est absent du résultat). */
+export const getLatestPositions = async (boatIds: string[]) => {
+  if (boatIds.length === 0) return [] as LatestBoatPosition[];
+  const { data } = await axiosClient.get(`/positions/latest`, { params: { boatIds: boatIds.join(",") } });
+  return data as LatestBoatPosition[];
+};
+
+export interface LatestBoatPosition {
+  boatId: string;
+  latitude: number;
+  longitude: number;
+  speed: number | null;
+  createdAt: string;
+}
+
 export const postPosition = async (position: PositionPayload) => {
   const { data } = await axiosClient.post(`/positions`, position);
   return data;
