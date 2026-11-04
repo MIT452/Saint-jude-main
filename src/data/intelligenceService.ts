@@ -96,13 +96,37 @@ export const cancelReservationRequest = async (reservationId: string): Promise<R
    ========================================================================== */
 
 export const getLatestPosition = async (boatId: string) => {
-  const { data } = await axiosClient.get(`/positions/${boatId}/latest`);
-  return data;
+  const id = String(boatId ?? "").trim();
+  if (!id) return null;
+
+  try {
+    const { data } = await axiosClient.get(`/positions/${encodeURIComponent(id)}/latest`);
+    return data ?? null;
+  } catch (error: any) {
+    const status = error?.response?.status;
+    const message = String(error?.message ?? "");
+
+    // Certaines embarcations n'ont pas encore de position enregistrée ou le backend n'expose pas
+    // cet endpoint pour ce bateau : on retourne null au lieu de faire exploser l'UI et la console.
+    if (status === 404 || /not found|not found/i.test(message) || /boat.*not found/i.test(message)) {
+      return null;
+    }
+
+    throw error;
+  }
 };
 
 export const postPosition = async (position: PositionPayload) => {
-  const { data } = await axiosClient.post(`/positions`, position);
-  return data;
+  try {
+    const { data } = await axiosClient.post(`/positions`, position);
+    return data;
+  } catch (error: any) {
+    const status = error?.response?.status;
+    if (status === 404) {
+      return null;
+    }
+    throw error;
+  }
 };
 
 /* ==========================================================================

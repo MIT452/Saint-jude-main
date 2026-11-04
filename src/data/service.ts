@@ -259,6 +259,11 @@ export const onAddService = async (
   }
 };
 
+// Alias de compatibilité pour les anciens composants qui utilisent des noms différents.
+export const onPostService = onAddService;
+export const onCreateService = onAddService;
+export const onSaveService = onAddService;
+
 export const onUpdateService = async (
   nameUpdate: string,
   params: Boat | User | Goods | Reservation | Trip | CashMovement | FuelConsumption
