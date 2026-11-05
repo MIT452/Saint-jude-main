@@ -7,7 +7,7 @@ import {
   Ship, TrendingUp, TrendingDown, Wallet, CalendarDays, CreditCard, Bell, Search, Calendar, ChevronDown, UserCircle2,
   Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle,
   BarChart3, Brain, Navigation, ShieldCheck, Package, Lightbulb, Download, Info, Trophy, MapPin, ArrowRight, Minus,
-  Users, Anchor, X, Send, ShieldAlert,
+  Users, Anchor, X, Send, ShieldAlert, Settings,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
@@ -16,6 +16,7 @@ import { RootState } from "../redux";
 import { formatCurrency } from "../Tools/Tools";
 import { askAIJson } from "../data/auditAI";
 import { getLatestPosition, getRealtimeOrigin } from "../data/intelligenceService";
+import NotificationSettingsPanel from "./NotificationSettingsPanel";
 
 interface PropsDashboard {
   onSetToAudit: (value: string) => void;
@@ -342,6 +343,7 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [gpsUnavailable, setGpsUnavailable] = useState(false);
   const [slow, setSlow] = useState(false);
   const [stuck, setStuck] = useState(false);
+  const [showNotif, setShowNotif] = useState(false);
   const [demo, setDemo] = useState<boolean>(() => {
     try { return localStorage.getItem("sj_demo") === "1"; } catch { return false; }
   });
@@ -368,6 +370,8 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       ((state.stJude as any).goods ?? (state.stJude as any).goodsList ?? (state.stJude as any).marchandise ?? []) as any[],
   );
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
+  // Seuls le propriétaire et l'administrateur configurent les notifications (le backend re-vérifie)
+  const canConfigNotif = /propri|admin/i.test(String(currentUser?.role ?? ""));
 
   useEffect(() => {
     let cancelled = false;
@@ -1000,6 +1004,15 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-xs font-semibold px-4 py-2 rounded-full"
           >
             <ShieldCheck size={16} /> Audit Logs
+          </button>
+        )}
+        {canConfigNotif && (
+          <button
+            type="button"
+            onClick={() => setShowNotif(true)}
+            className="flex items-center gap-2 bg-white hover:bg-[#eef4ff] border border-[#dbe5f5] text-[#1255d6] text-xs font-semibold px-4 py-2 rounded-full"
+          >
+            <Settings size={16} /> Notifications
           </button>
         )}
         <button type="button" aria-label="Notifications" className="relative w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
@@ -1853,6 +1866,9 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
           <Download size={14} /> Exporter le rapport
         </button>
       </div>
+
+      {/* Configuration des notifications (e-mail + WhatsApp) */}
+      {showNotif && canConfigNotif && <NotificationSettingsPanel onClose={() => setShowNotif(false)} />}
 
       {/* « Pourquoi ce résultat ? » */}
       {explain && (
