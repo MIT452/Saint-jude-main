@@ -7,7 +7,7 @@ import {
   Ship, TrendingUp, TrendingDown, Wallet, CalendarDays, CreditCard, Bell, Search, Calendar, ChevronDown, UserCircle2,
   Wind, Waves, Droplets, Eye, Cloud, CloudSun, CloudRain, CloudFog, CloudLightning, Sun, AlertTriangle,
   BarChart3, Brain, Navigation, ShieldCheck, Package, Lightbulb, Download, Info, Trophy, MapPin, ArrowRight, Minus,
-  Users, Anchor, X, Send, ShieldAlert, Settings,
+  Users, Anchor, X, ShieldAlert,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useSelector } from "react-redux";
@@ -16,7 +16,6 @@ import { RootState } from "../redux";
 import { formatCurrency } from "../Tools/Tools";
 import { askAIJson } from "../data/auditAI";
 import { getLatestPosition, getRealtimeOrigin } from "../data/intelligenceService";
-import NotificationSettingsPanel from "./NotificationSettingsPanel";
 
 interface PropsDashboard {
   onSetToAudit: (value: string) => void;
@@ -343,7 +342,6 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
   const [gpsUnavailable, setGpsUnavailable] = useState(false);
   const [slow, setSlow] = useState(false);
   const [stuck, setStuck] = useState(false);
-  const [showNotif, setShowNotif] = useState(false);
   const [demo, setDemo] = useState<boolean>(() => {
     try { return localStorage.getItem("sj_demo") === "1"; } catch { return false; }
   });
@@ -354,10 +352,6 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       return nv;
     });
   const [explain, setExplain] = useState<Explain | null>(null);
-  const [q, setQ] = useState("");
-  const [answer, setAnswer] = useState<string | null>(null);
-  const [asking, setAsking] = useState(false);
-  const [askErr, setAskErr] = useState(false);
   const [loadedAt] = useState(() => new Date());
   const [now, setNow] = useState(() => new Date());
 
@@ -370,8 +364,6 @@ const Dashboard: FC<PropsDashboard> = ({ onSetToAudit }) => {
       ((state.stJude as any).goods ?? (state.stJude as any).goodsList ?? (state.stJude as any).marchandise ?? []) as any[],
   );
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
-  // Seuls le propriétaire et l'administrateur configurent les notifications (le backend re-vérifie)
-  const canConfigNotif = /propri|admin/i.test(String(currentUser?.role ?? ""));
 
   useEffect(() => {
     let cancelled = false;
@@ -707,32 +699,6 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
   const alerts = demo ? DEMO.alerts : insight && insight.alertes.length ? insight.alertes : localAlerts;
   const facteursView: string[] = demo ? DEMO.facteurs : insight?.facteurs ?? [];
 
-  // ---------- Assistante Aina (questions sur les données réelles)
-  const ask = async (question: string) => {
-    const text = question.trim();
-    if (!text || asking) return;
-    setAsking(true);
-    setAskErr(false);
-    setAnswer(null);
-    const data = {
-      periode: cashRange, credit: totalCredit, debit: totalDebit, solde,
-      reservations: { total: reservation.length, ...resStats.st, payes: resStats.payes, partiels: resStats.partiels, impayes: resStats.impayes },
-      tauxPaiement: payRate, resteAPayer: unpaid, voyages: trip.length, trajets: routeReal.slice(0, 5),
-      clients: { actifs: clientStats.total, recurrents: clientStats.recurrents }, bateaux: boatStats.rows,
-      depenses: expenseStats, anomalies: anomalies.map((a) => a.s),
-    };
-    try {
-      const r = await askAIJson<{ reponse: string }>(
-        `Tu es Aina, l'assistante IA de SAINT-JUDE (transport maritime, Madagascar, montants en Ar). Données réelles : ${JSON.stringify(data)}. Question : "${text}". Réponds UNIQUEMENT en JSON {"reponse":"..."}, en français, 5 phrases maximum, uniquement à partir de ces données ; si l'information manque, dis-le.`,
-      );
-      if (r && typeof r.reponse === "string") setAnswer(r.reponse);
-      else setAskErr(true);
-    } catch {
-      setAskErr(true);
-    }
-    setAsking(false);
-  };
-
   // ---------- Météo réelle (Open-Meteo, Toamasina)
   useEffect(() => {
     let off = false;
@@ -1004,15 +970,6 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
             className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-xs font-semibold px-4 py-2 rounded-full"
           >
             <ShieldCheck size={16} /> Audit Logs
-          </button>
-        )}
-        {canConfigNotif && (
-          <button
-            type="button"
-            onClick={() => setShowNotif(true)}
-            className="flex items-center gap-2 bg-white hover:bg-[#eef4ff] border border-[#dbe5f5] text-[#1255d6] text-xs font-semibold px-4 py-2 rounded-full"
-          >
-            <Settings size={16} /> Notifications
           </button>
         )}
         <button type="button" aria-label="Notifications" className="relative w-10 h-10 bg-white border border-[#dbe5f5] rounded-full flex items-center justify-center">
@@ -1750,100 +1707,51 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
         </div>
       </div>
 
-      {/* AI Security + Assistante Aina */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        <div className={`${card} p-4`}>
-          <h3 className="font-bold text-sm flex items-center gap-2 mb-3">
-            <ShieldAlert size={16} className="text-[#e5342f]" /> AI Security — Contrôles & anomalies
-          </h3>
-          {!dataReady ? (
-            <p className="text-xs text-gray-500 py-6 text-center">Les contrôles s'exécutent dès que les données sont chargées.</p>
-          ) : anomalies.length === 0 ? (
-            <p className="text-xs text-[#0f9d78] bg-[#eefaf5] rounded-lg p-3">
-              Aucune anomalie détectée (montants de caisse, cohérence des réservations, rattachement des trajets et des marchandises).
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {anomalies.map((a, i) => {
-                const { c, Icon, tc } = lvlStyle[a.lvl];
-                return (
-                  <li key={i} className="flex items-start gap-2 text-[11px] border rounded-lg p-2.5 bg-[#f8fafd]">
-                    <span className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${c}`}>
-                      <Icon size={14} />
-                    </span>
-                    <div>
-                      <p className={`font-semibold ${tc}`}>{a.t}</p>
-                      <p className="text-gray-600">{a.s}</p>
-                      {a.a && (
-                        <p className="text-[#1255d6] font-semibold mt-0.5 flex items-center gap-1">
-                          <ArrowRight size={10} /> {a.a}
-                        </p>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-          <p className="text-[10px] text-gray-500 mt-3">
-            Ces contrôles signalent des écarts ; les règles de sécurité du backend décident si une action est autorisée.
+      {/* AI Security */}
+      <div className={`${card} p-4`}>
+        <h3 className="font-bold text-sm flex items-center gap-2 mb-3">
+          <ShieldAlert size={16} className="text-[#e5342f]" /> AI Security — Contrôles & anomalies
+        </h3>
+        {!dataReady ? (
+          <p className="text-xs text-gray-500 py-6 text-center">Les contrôles s'exécutent dès que les données sont chargées.</p>
+        ) : anomalies.length === 0 ? (
+          <p className="text-xs text-[#0f9d78] bg-[#eefaf5] rounded-lg p-3">
+            Aucune anomalie détectée (montants de caisse, cohérence des réservations, rattachement des trajets et des marchandises).
           </p>
-          {currentUser?.role === "Propriétaire" && (
-            <button
-              onClick={() => onSetToAudit("Audit")}
-              className="mt-2 inline-flex items-center gap-2 text-[11px] font-semibold text-[#1255d6] hover:underline"
-            >
-              <ShieldCheck size={14} /> Ouvrir les Audit Logs
-            </button>
-          )}
-        </div>
-
-        <div className={`${card} p-4`}>
-          <h3 className="font-bold text-sm flex items-center gap-2 mb-3">
-            <Brain size={16} className="text-[#7c3aed]" /> Aina — Assistante IA
-          </h3>
-          <div className="flex flex-wrap gap-1.5 mb-2">
-            {["Explique les paiements non réglés", "Quel est le trajet le plus rentable ?", "Quels bateaux sont disponibles ?"].map((sg) => (
-              <button
-                key={sg}
-                type="button"
-                onClick={() => { setQ(sg); ask(sg); }}
-                disabled={asking || !dataReady}
-                className="text-[10px] px-2.5 py-1 rounded-full border border-[#dbe5f5] bg-[#f8fafd] hover:bg-[#eef4ff] disabled:opacity-50"
-              >
-                {sg}
-              </button>
-            ))}
-          </div>
-          <div className="flex gap-2">
-            <input
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") ask(q); }}
-              placeholder="Posez une question sur vos données…"
-              className="flex-1 border border-[#dbe5f5] rounded-full px-3 py-2 text-xs bg-white"
-            />
-            <button
-              type="button"
-              onClick={() => ask(q)}
-              disabled={asking || !dataReady || !q.trim()}
-              aria-label="Envoyer"
-              className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center disabled:opacity-50"
-            >
-              <Send size={14} />
-            </button>
-          </div>
-          <div className="mt-3 text-[11px] min-h-[64px]">
-            {asking && <p className="text-gray-500">Aina analyse vos données…</p>}
-            {answer && <p className="text-gray-700 whitespace-pre-line bg-[#eef4ff] rounded-lg p-3">{answer}</p>}
-            {askErr && (
-              <p className="text-[#b45309] bg-[#fff8ea] rounded-lg p-3">
-                Le service IA n'a pas pu répondre pour le moment. Les indicateurs ci-dessus restent calculés sur vos données réelles.
-              </p>
-            )}
-          </div>
-          <p className="text-[10px] text-gray-400">Réponses fondées uniquement sur les données chargées dans le tableau de bord.</p>
-        </div>
+        ) : (
+          <ul className="space-y-2">
+            {anomalies.map((a, i) => {
+              const { c, Icon, tc } = lvlStyle[a.lvl];
+              return (
+                <li key={i} className="flex items-start gap-2 text-[11px] border rounded-lg p-2.5 bg-[#f8fafd]">
+                  <span className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${c}`}>
+                    <Icon size={14} />
+                  </span>
+                  <div>
+                    <p className={`font-semibold ${tc}`}>{a.t}</p>
+                    <p className="text-gray-600">{a.s}</p>
+                    {a.a && (
+                      <p className="text-[#1255d6] font-semibold mt-0.5 flex items-center gap-1">
+                        <ArrowRight size={10} /> {a.a}
+                      </p>
+                    )}
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <p className="text-[10px] text-gray-500 mt-3">
+          Ces contrôles signalent des écarts ; les règles de sécurité du backend décident si une action est autorisée.
+        </p>
+        {currentUser?.role === "Propriétaire" && (
+          <button
+            onClick={() => onSetToAudit("Audit")}
+            className="mt-2 inline-flex items-center gap-2 text-[11px] font-semibold text-[#1255d6] hover:underline"
+          >
+            <ShieldCheck size={14} /> Ouvrir les Audit Logs
+          </button>
+        )}
       </div>
 
       </>
@@ -1866,9 +1774,6 @@ Réponds UNIQUEMENT en JSON: {"analyse":"2 phrases maximum","prevision":"2 phras
           <Download size={14} /> Exporter le rapport
         </button>
       </div>
-
-      {/* Configuration des notifications (e-mail + WhatsApp) */}
-      {showNotif && canConfigNotif && <NotificationSettingsPanel onClose={() => setShowNotif(false)} />}
 
       {/* « Pourquoi ce résultat ? » */}
       {explain && (
