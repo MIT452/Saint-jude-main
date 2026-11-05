@@ -5,11 +5,12 @@ import {
   MapPin,
   Package,
   ScanSearch,
+  Settings,
   Ship,
   User,
   Users,
 } from "lucide-react";
-import { Permission } from "../data/type"; 
+import { Permission } from "../data/type";
 
 export const menuItems = [
   {
@@ -81,6 +82,13 @@ export const menuItems = [
     icon: Package,
     description: "Réservation, IA, voix et notifications",
     permission: "merchandise:manage" as Permission,
+  },
+  {
+    id: "notificationSettings",
+    label: "Configuration",
+    icon: Settings,
+    description: "Notifications",
+    permission: "users:manage" as Permission,
   },
   {
     id: "analytics",
