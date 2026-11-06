@@ -18,9 +18,10 @@ const BADGES: Record<string, 'ok' | 'warn' | 'bad'> = {
   'impayée': 'bad',
 };
 const BADGE_RE = new RegExp(`(?<![\\p{L}])(${Object.keys(BADGES).join('|')})(?![\\p{L}])`, 'giu');
-
 function decorate(node: React.ReactNode): React.ReactNode {
   if (typeof node === 'string') {
+    // Pas de pastille dans une phrase de négation : "pas de voyage disponible"
+    if (/\b(pas de|aucun|aucune|n[’']y a pas|indisponible)\b/i.test(node)) return node;
     return node.split(BADGE_RE).map((part, i) => {
       const kind = BADGES[part.toLowerCase()];
       return kind ? (
