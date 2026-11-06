@@ -75,19 +75,29 @@ const Switch: FC<{ checked: boolean; onChange: (v: boolean) => void; label: stri
 );
 
 const Badge: FC<{ on: boolean }> = ({ on }) => (
-  <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-md ${on ? "bg-[#dcf5e7] text-[#0f9d78]" : "bg-gray-100 text-gray-500"}`}>
+  <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-md ${on ? "bg-[#dcf5e7] text-[#0f9d78]" : "bg-gray-100 text-gray-500"}`}>
     {on ? "Actif" : "Inactif"}
   </span>
 );
 
-const Row: FC<{ icon: ReactNode; title: string; sub: string; right: ReactNode }> = ({ icon, title, sub, right }) => (
-  <div className="flex items-center gap-3 rounded-xl bg-white/70 border border-[#e5ebf5] p-3">
-    <div className="w-10 h-10 rounded-full flex items-center justify-center shrink-0">{icon}</div>
-    <div className="min-w-0 w-40">
-      <p className="text-sm font-bold">{title}</p>
+// Ligne : icône | titre + sous-titre | pastille (valeur + badge + interrupteur)
+const Row: FC<{ icon: ReactNode; title: string; sub: string; children: ReactNode }> = ({ icon, title, sub, children }) => (
+  <div className="flex items-center gap-3">
+    <div className="w-11 h-11 shrink-0 flex items-center justify-center">{icon}</div>
+    <div className="w-36 shrink-0 border-l border-[#dbe5f5] pl-3">
+      <p className="text-sm font-bold leading-tight">{title}</p>
       <p className="text-[11px] text-[#3e5788]">{sub}</p>
     </div>
-    <div className="flex-1 flex items-center gap-2 justify-end">{right}</div>
+    <div className="flex-1 min-w-0 flex items-center gap-2 rounded-xl bg-white border border-[#e5ebf5] shadow-sm px-3 py-2.5">
+      {children}
+    </div>
+  </div>
+);
+
+const Note: FC<{ children: ReactNode }> = ({ children }) => (
+  <div className="flex items-start gap-2 rounded-lg bg-[#eef4ff] text-[#1255d6] text-xs p-3">
+    <Info size={14} className="shrink-0 mt-0.5" />
+    <p>{children}</p>
   </div>
 );
 
@@ -182,111 +192,89 @@ const NotificationSettingsPanel: FC = () => {
   ];
 
   const clientCard = (
-    <div className="rounded-2xl border border-[#c9dafb] overflow-hidden bg-white">
-      <div className="bg-[#e3edff] p-4 flex items-center gap-3">
+    <div className="rounded-2xl border border-[#c9dafb] overflow-hidden bg-[#f7faff] shadow-sm">
+      <div className="bg-[#dfe9ff] p-4 flex items-center gap-4">
         <div className="w-12 h-12 rounded-full bg-[#1255d6] text-white flex items-center justify-center">
           <UserCircle2 size={28} />
         </div>
         <div>
-          <h3 className="text-lg font-extrabold">Client / Voyageur</h3>
-          <p className="text-xs text-[#3e5788]">Coordonnées issues de son compte</p>
+          <h3 className="text-xl font-extrabold">Client / Voyageur</h3>
+          <p className="text-sm text-[#3e5788]">Coordonnées issues de son compte</p>
         </div>
       </div>
       <div className="p-4 space-y-3">
-        <Row
-          icon={<MessageCircle size={30} className="text-[#25d366]" />}
-          title="WhatsApp client"
-          sub="Numéro du compte client"
-          right={<><Badge on={form.clientWhatsappEnabled} /><Switch checked={form.clientWhatsappEnabled} onChange={(v) => setForm({ ...form, clientWhatsappEnabled: v })} label="WhatsApp client" /></>}
-        />
-        <Row
-          icon={<Mail size={30} className="text-[#1255d6]" />}
-          title="E-mail client"
-          sub="Adresse du compte client"
-          right={<><Badge on={form.clientEmailEnabled} /><Switch checked={form.clientEmailEnabled} onChange={(v) => setForm({ ...form, clientEmailEnabled: v })} label="E-mail client" /></>}
-        />
-        <div className="flex items-start gap-2 rounded-lg bg-[#eef4ff] text-[#1255d6] text-xs p-3">
-          <Info size={14} className="shrink-0 mt-0.5" />
-          <p>Chaque client reçoit uniquement ses propres notifications, directement sur son WhatsApp ou sa boîte e-mail. Ses coordonnées viennent de son compte et ne sont pas affichées ici.</p>
-        </div>
+        <Row icon={<MessageCircle size={34} className="text-[#25d366]" />} title="WhatsApp client" sub="Numéro du compte client">
+          <span className="flex-1 text-sm text-gray-500 truncate">+261 34 ** ** **</span>
+          <Badge on={form.clientWhatsappEnabled} />
+          <Switch checked={form.clientWhatsappEnabled} onChange={(v) => setForm({ ...form, clientWhatsappEnabled: v })} label="WhatsApp client" />
+        </Row>
+        <Row icon={<Mail size={34} className="text-[#1255d6]" />} title="E-mail client" sub="Adresse du compte client">
+          <span className="flex-1 text-sm text-gray-500 truncate">client@••••••</span>
+          <Badge on={form.clientEmailEnabled} />
+          <Switch checked={form.clientEmailEnabled} onChange={(v) => setForm({ ...form, clientEmailEnabled: v })} label="E-mail client" />
+        </Row>
+        <Note>Chaque client reçoit uniquement ses propres notifications, directement sur son WhatsApp ou sa boîte e-mail. Ses coordonnées viennent de son compte et ne sont jamais affichées ici.</Note>
       </div>
     </div>
   );
 
   const adminCard = (
-    <div className="rounded-2xl border border-[#f5d79a] overflow-hidden bg-white">
-      <div className="bg-[#fff3d6] p-4 flex items-center gap-3">
+    <div className="rounded-2xl border border-[#f5d79a] overflow-hidden bg-[#fffdf7] shadow-sm">
+      <div className="bg-[#fff0cc] p-4 flex items-center gap-4">
         <div className="w-12 h-12 rounded-full bg-[#f59e0b] text-white flex items-center justify-center">
           <ShieldCheck size={26} />
         </div>
         <div>
-          <h3 className="text-lg font-extrabold">Administrateur</h3>
-          <p className="text-xs text-[#3e5788]">Coordonnées configurées dans le tableau de bord</p>
+          <h3 className="text-xl font-extrabold">Administrateur</h3>
+          <p className="text-sm text-[#3e5788]">Coordonnées configurées dans le tableau de bord</p>
         </div>
       </div>
       <div className="p-4 space-y-3">
-        <Row
-          icon={<MessageCircle size={30} className="text-[#25d366]" />}
-          title="WhatsApp administrateur"
-          sub="Numéro configuré"
-          right={
-            <>
-              <input
-                className="w-36 border border-[#dbe5f5] rounded-lg px-2 py-1.5 text-xs"
-                placeholder="+261340000000"
-                value={form.whatsappNumber}
-                onChange={(e) => setForm({ ...form, whatsappNumber: e.target.value.trim() })}
-              />
-              <Badge on={form.whatsappEnabled} />
-              <Switch checked={form.whatsappEnabled} onChange={(v) => setForm({ ...form, whatsappEnabled: v })} label="WhatsApp administrateur" />
-            </>
-          }
-        />
-        {phoneBad && <p className="text-[10px] text-[#e5342f] -mt-1">Format attendu : + suivi de l'indicatif et du numéro.</p>}
-        <Row
-          icon={<Mail size={30} className="text-[#1255d6]" />}
-          title="E-mail administrateur"
-          sub="Adresse configurée"
-          right={
-            <>
-              <input
-                className="w-36 border border-[#dbe5f5] rounded-lg px-2 py-1.5 text-xs"
-                type="email"
-                placeholder="admin@exemple.com"
-                value={form.emailAddress}
-                onChange={(e) => setForm({ ...form, emailAddress: e.target.value.trim() })}
-              />
-              <Badge on={form.emailEnabled} />
-              <Switch checked={form.emailEnabled} onChange={(v) => setForm({ ...form, emailEnabled: v })} label="E-mail administrateur" />
-            </>
-          }
-        />
-        {mailBad && <p className="text-[10px] text-[#e5342f] -mt-1">Adresse e-mail invalide.</p>}
-        <div className="flex items-start gap-2 rounded-lg bg-[#eef4ff] text-[#1255d6] text-xs p-3">
-          <Info size={14} className="shrink-0 mt-0.5" />
-          <p>Ces coordonnées reçoivent les notifications administratives.</p>
-        </div>
+        <Row icon={<MessageCircle size={34} className="text-[#25d366]" />} title="WhatsApp administrateur" sub="Numéro configuré">
+          <input
+            className="flex-1 min-w-0 bg-transparent text-sm outline-none"
+            placeholder="+261340000000"
+            value={form.whatsappNumber}
+            onChange={(e) => setForm({ ...form, whatsappNumber: e.target.value.trim() })}
+          />
+          <Badge on={form.whatsappEnabled} />
+          <Switch checked={form.whatsappEnabled} onChange={(v) => setForm({ ...form, whatsappEnabled: v })} label="WhatsApp administrateur" />
+        </Row>
+        {phoneBad && <p className="text-[11px] text-[#e5342f]">Format attendu : + suivi de l'indicatif et du numéro.</p>}
+        <Row icon={<Mail size={34} className="text-[#1255d6]" />} title="E-mail administrateur" sub="Adresse configurée">
+          <input
+            className="flex-1 min-w-0 bg-transparent text-sm outline-none"
+            type="email"
+            placeholder="admin@exemple.com"
+            value={form.emailAddress}
+            onChange={(e) => setForm({ ...form, emailAddress: e.target.value.trim() })}
+          />
+          <Badge on={form.emailEnabled} />
+          <Switch checked={form.emailEnabled} onChange={(v) => setForm({ ...form, emailEnabled: v })} label="E-mail administrateur" />
+        </Row>
+        {mailBad && <p className="text-[11px] text-[#e5342f]">Adresse e-mail invalide.</p>}
+        <Note>Ces coordonnées reçoivent les notifications administratives.</Note>
       </div>
     </div>
   );
 
   const eventsCard = (
-    <div className="rounded-2xl border border-[#d9ccf5] overflow-hidden bg-white">
-      <div className="bg-[#f0eaff] p-4 flex items-center gap-3">
+    <div className="rounded-2xl border border-[#d9ccf5] overflow-hidden bg-white shadow-sm">
+      <div className="bg-[#efe8ff] p-4 flex items-center gap-4">
         <div className="w-12 h-12 rounded-xl bg-[#7c3aed] text-white flex items-center justify-center">
           <CalendarDays size={26} />
         </div>
         <div>
-          <h3 className="text-lg font-extrabold">Événements à notifier</h3>
-          <p className="text-xs text-[#3e5788]">Choisissez les événements qui doivent déclencher une notification</p>
+          <h3 className="text-xl font-extrabold">Événements à notifier</h3>
+          <p className="text-sm text-[#3e5788]">Choisissez les événements qui doivent déclencher une notification</p>
         </div>
       </div>
       <div className="p-4 grid grid-cols-1 md:grid-cols-3 xl:grid-cols-5 gap-3">
         {EVENTS.map(({ key, title, text, Icon, color }) => (
-          <div key={key} className="rounded-xl border border-[#e5ebf5] p-3 text-center flex flex-col items-center gap-2">
-            <Icon size={26} className={color} />
-            <p className="text-sm font-bold">{title}</p>
-            <p className="text-[11px] text-[#3e5788] flex-1">{text}</p>
+          <div key={key} className="rounded-xl border border-[#e5ebf5] bg-white shadow-sm p-3 text-center flex flex-col items-center gap-2">
+            <Icon size={28} className={color} />
+            <p className="text-sm font-extrabold leading-tight">{title}</p>
+            <p className="text-xs text-[#3e5788] flex-1">{text}</p>
             <Switch checked={form.events.includes(key)} onChange={() => toggleEvent(key)} label={title} />
           </div>
         ))}
@@ -298,11 +286,11 @@ const NotificationSettingsPanel: FC = () => {
     <div className="p-5 bg-[#f3f7fd] min-h-full space-y-4 text-[#10285e]">
       {/* En-tête */}
       <div className="rounded-2xl bg-[#e3edff] p-4 flex flex-wrap items-center gap-4">
-        <div className="w-14 h-14 rounded-full bg-[#c9dafb] text-[#1255d6] flex items-center justify-center">
-          <Settings size={30} />
+        <div className="w-16 h-16 rounded-full bg-[#c9dafb] text-[#1255d6] flex items-center justify-center">
+          <Settings size={32} />
         </div>
         <div className="flex-1 min-w-[220px]">
-          <h1 className="text-2xl font-extrabold leading-tight">Configuration des Notifications</h1>
+          <h1 className="text-3xl font-extrabold leading-tight">Configuration des Notifications</h1>
           <p className="text-sm text-[#3e5788]">Gérez les destinataires, les canaux et les événements à notifier</p>
         </div>
         <span className={`flex items-center gap-2 rounded-full border px-4 py-2 text-sm font-semibold ${online ? "bg-[#e8f8ef] border-[#9fdcb8] text-[#0f9d78]" : "bg-[#ffe9e9] border-[#f3b4b4] text-[#e5342f]"}`}>
@@ -318,8 +306,8 @@ const NotificationSettingsPanel: FC = () => {
             key={key}
             type="button"
             onClick={() => setTab(key)}
-            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold border ${
-              tab === key ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-white text-[#10285e] border-[#dbe5f5]"
+            className={`flex items-center gap-2 px-5 py-2.5 rounded-xl text-sm font-bold border shadow-sm ${
+              tab === key ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-[#eef4ff] text-[#10285e] border-[#dbe5f5]"
             }`}
           >
             <Icon size={16} /> {label}
@@ -394,16 +382,16 @@ const NotificationSettingsPanel: FC = () => {
 
           {/* Test */}
           <div className="rounded-2xl border border-[#9fdcb8] bg-[#e8f8ef] p-4 flex flex-wrap items-center gap-4">
-            <Send size={28} className="text-[#1255d6]" />
+            <Send size={30} className="text-[#1255d6]" />
             <div className="flex-1 min-w-[220px]">
-              <h3 className="font-extrabold">Tester les notifications</h3>
+              <h3 className="text-lg font-extrabold">Tester les notifications</h3>
               <p className="text-sm text-[#3e5788]">Envoyez un message de test pour vérifier vos paramètres.</p>
             </div>
             <button
               type="button"
               onClick={sendTest}
               disabled={busy || changedContact}
-              className="flex items-center gap-2 bg-white border border-[#1255d6] text-[#1255d6] text-sm font-bold px-5 py-2 rounded-full disabled:opacity-50"
+              className="flex items-center gap-2 bg-white border border-[#1255d6] text-[#1255d6] text-sm font-bold px-5 py-2.5 rounded-full disabled:opacity-50"
             >
               <Send size={14} /> Envoyer un message de test
             </button>
@@ -416,7 +404,7 @@ const NotificationSettingsPanel: FC = () => {
               type="button"
               onClick={reset}
               disabled={busy}
-              className="flex items-center gap-2 border border-[#dbe5f5] text-sm font-bold px-5 py-2 rounded-full"
+              className="flex items-center gap-2 border border-[#dbe5f5] bg-[#f8fafd] text-sm font-bold px-5 py-2.5 rounded-full"
             >
               <RefreshCw size={14} /> Réinitialiser
             </button>
@@ -429,7 +417,7 @@ const NotificationSettingsPanel: FC = () => {
               type="button"
               onClick={save}
               disabled={busy || phoneBad || mailBad}
-              className="ml-auto flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-bold px-6 py-2.5 rounded-full disabled:opacity-50"
+              className="ml-auto flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-bold px-7 py-3 rounded-full disabled:opacity-50"
             >
               <Save size={14} /> Enregistrer les paramètres
             </button>
