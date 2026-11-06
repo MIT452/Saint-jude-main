@@ -52,8 +52,8 @@ export const DEFAULT_SETTINGS: NotificationSettings = {
 export const hasUnknownVars = (text: string) =>
   [...text.matchAll(/\{(\w+)\}/g)].some((m) => !(PLACEHOLDERS as readonly string[]).includes(m[1]));
 
-const endpoint = () => `${getRealtimeOrigin().replace(/\/$/, "")}/api/notification-settings`;
-
+const endpoint = () =>
+  `${getRealtimeOrigin().replace(/\/$/, "").replace(/\/api$/, "")}/api/notification-settings`;
 async function call(method: "GET" | "PUT", body?: unknown): Promise<NotificationSettings> {
   const res = await fetch(endpoint(), {
     method,

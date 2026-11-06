@@ -6,7 +6,9 @@ import {
 } from "lucide-react";
 import { RootState } from "../redux";
 
-const API_BASE = ((import.meta as any).env?.VITE_API_URL ?? "").replace(/\/+$/, "");
+const API_BASE = ((import.meta as any).env?.VITE_API_URL ?? "")
+  .replace(/\/+$/, "")
+  .replace(/\/api$/, "");
 const API = /\/api$/i.test(API_BASE) ? API_BASE : `${API_BASE}/api`;
 
 type Form = {
