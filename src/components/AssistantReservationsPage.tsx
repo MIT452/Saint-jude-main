@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useSelector } from "react-redux";
 import {
   ArrowRight,
@@ -36,7 +36,7 @@ type StatTone = "up" | "warn";
 interface StatView {
   label: string;
   value: number;
-  trend: number; // variation en % par rapport au mois dernier
+  trend: number | null; // variation en % par rapport au mois dernier, null si non calculable
   tone: StatTone;
   icon: typeof Ship;
 }
@@ -102,12 +102,13 @@ const monthIndex = (value?: string, offset = 0) => {
   return d.getFullYear() * 12 + d.getMonth() - offset;
 };
 
-// Variation en % entre le mois courant et le mois précédent
-const trendOf = (list: ReservationRecord[]) => {
+// Variation en % entre le mois courant et le mois précédent.
+// Renvoie null si l'une des deux périodes est vide : aucune tendance n'est inventée.
+const trendOf = (list: ReservationRecord[]): number | null => {
   const current = monthIndex();
   const cur = list.filter((r) => monthIndex(r.createdAt ?? r.date) === current).length;
   const prev = list.filter((r) => monthIndex(r.createdAt ?? r.date) === current - 1).length;
-  if (prev === 0) return cur > 0 ? 100 : 0;
+  if (prev === 0 || cur === 0) return null;
   return Math.round(((cur - prev) / prev) * 100);
 };
 
@@ -211,7 +212,8 @@ const DEMO_VIEW: PageView = {
 ========================================================= */
 function StatCard({ stat }: { stat: StatView }) {
   const Icon = stat.icon;
-  const negative = stat.trend < 0;
+  const hasTrend = stat.trend !== null;
+  const negative = hasTrend && (stat.trend as number) < 0;
   const trendColor = negative ? "text-red-500" : stat.tone === "warn" ? "text-orange-500" : "text-emerald-600";
   const Arrow = negative ? ArrowDown : ArrowUp;
   return (
@@ -223,14 +225,18 @@ function StatCard({ stat }: { stat: StatView }) {
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-800">{stat.label}</p>
           <p className="text-3xl font-bold text-blue-950">{stat.value}</p>
-          <p className="mt-1 flex items-center gap-1 text-xs">
-            <Arrow className={`h-3.5 w-3.5 ${trendColor}`} />
-            <span className={`font-semibold ${trendColor}`}>
-              {negative ? "" : "+"}
-              {stat.trend}%
-            </span>
-          </p>
-          <p className="text-xs text-slate-500">par rapport au mois dernier</p>
+          {hasTrend && (
+            <>
+              <p className="mt-1 flex items-center gap-1 text-xs">
+                <Arrow className={`h-3.5 w-3.5 ${trendColor}`} />
+                <span className={`font-semibold ${trendColor}`}>
+                  {negative ? "" : "+"}
+                  {stat.trend}%
+                </span>
+              </p>
+              <p className="text-xs text-slate-500">par rapport au mois dernier</p>
+            </>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -284,6 +290,9 @@ function BoatPhoto({ src, alt }: { src: string; alt: string }) {
 
 type Tab = "recent" | "pending" | "confirmed";
 
+// Bateaux en lecture seule, pour les comptes qui n'ont pas accès à la gestion des bateaux
+type PublicBoat = { id: string | number; name?: string; capacity?: number | string; state?: string; image?: string };
+
 /* =========================================================
    Page
 ========================================================= */
@@ -296,22 +305,40 @@ export default function AssistantReservationsPage({
 }: AssistantReservationsPageProps) {
   const { boat } = useSelector((state: RootState) => state.stJude);
   const [tab, setTab] = useState<Tab>("recent");
+  const [fallbackBoats, setFallbackBoats] = useState<PublicBoat[]>([]);
 
   const demo = reservations === undefined;
   const view = useMemo(() => (demo ? DEMO_VIEW : buildView(reservations!)), [demo, reservations]);
 
+  // Si le store est vide (compte client), on lit la liste en lecture seule du serveur
+  const storeEmpty = (boat ?? []).length === 0;
+  useEffect(() => {
+    if (!storeEmpty) return;
+    let off = false;
+    fetch(`${API_ORIGIN}/api/boats/available`, { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((list) => {
+        if (!off && Array.isArray(list)) setFallbackBoats(list as PublicBoat[]);
+      })
+      .catch(() => {
+        if (!off) setFallbackBoats([]);
+      });
+    return () => {
+      off = true;
+    };
+  }, [storeEmpty]);
+
   // Bateaux : ceux du store, avec la photo ajoutée depuis la page Gestion de bateau
-  const boats: BoatView[] = useMemo(
-    () =>
-      (boat ?? []).map((b) => ({
-        id: String(b.id),
-        name: String(b.name ?? ""),
-        capacity: `${(Number(b.capacity) || 0).toLocaleString("fr-FR")} T`,
-        state: String(b.state ?? ""),
-        image: resolveImage(b.image),
-      })),
-    [boat],
-  );
+  const boats: BoatView[] = useMemo(() => {
+    const source: PublicBoat[] = storeEmpty ? fallbackBoats : ((boat ?? []) as unknown as PublicBoat[]);
+    return source.map((b) => ({
+      id: String(b.id),
+      name: String(b.name ?? ""),
+      capacity: `${(Number(b.capacity) || 0).toLocaleString("fr-FR")} T`,
+      state: String(b.state ?? ""),
+      image: resolveImage(b.image),
+    }));
+  }, [boat, storeEmpty, fallbackBoats]);
 
   const latestShown = useMemo(() => {
     const list =
@@ -352,7 +379,7 @@ export default function AssistantReservationsPage({
             <div>
               <Ship className="mb-1 h-9 w-9 text-blue-800" strokeWidth={1.6} />
               <p className="text-base font-bold text-blue-950">Bateaux</p>
-              <p className="mt-1 text-xs text-slate-500">par rapport au mois dernier</p>
+              <p className="mt-1 text-xs text-slate-500">{boats.length} bateau(x) enregistré(s)</p>
             </div>
           </CardContent>
         </Card>
