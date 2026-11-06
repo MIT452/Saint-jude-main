@@ -54,7 +54,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Authentification par cookie de session (sj_session), erreurs lues dans "error"
 const call = async (path: string, init?: RequestInit) => {
-  const res = await fetch(`${API}/api/notification-settings${path}`, {
+    const res = await fetch(`${API}/notification-settings${path}`, {
     credentials: "include",
     ...init,
     headers: { "Content-Type": "application/json", ...(init?.headers ?? {}) },
