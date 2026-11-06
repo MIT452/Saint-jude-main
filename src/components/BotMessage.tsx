@@ -17,7 +17,15 @@ const BADGES: Record<string, 'ok' | 'warn' | 'bad'> = {
   'impayé': 'bad',
   'impayée': 'bad',
 };
-const BADGE_RE = new RegExp(`(?<![\\p{L}])(${Object.keys(BADGES).join('|')})(?![\\p{L}])`, 'giu');
+
+// "disponible" seul devient pastille uniquement s'il désigne un état (après ":", "(", "-" ou "–").
+// Dans une phrase ("une date disponible"), il reste du texte normal.
+const STATE_WORDS = Object.keys(BADGES).filter((k) => k !== 'disponible').join('|');
+const BADGE_RE = new RegExp(
+  `((?<![\\p{L}])(?:${STATE_WORDS})(?![\\p{L}])|(?<=[:(–-]\\s*)disponible(?![\\p{L}]))`,
+  'giu',
+);
+
 function decorate(node: React.ReactNode): React.ReactNode {
   if (typeof node === 'string') {
     // Pas de pastille dans une phrase de négation : "pas de voyage disponible"
