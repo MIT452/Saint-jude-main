@@ -1,194 +1,189 @@
 import { FC, useEffect, useState } from "react";
-import { Brain, Mail, MessageCircle, Save, Sparkles, X } from "lucide-react";
-import { askAIJson } from "../data/auditAI";
-import {
-  DEFAULT_SETTINGS, EVENT_LABELS, EVENT_TYPES, PLACEHOLDERS, fetchNotificationSettings,
-  hasUnknownVars, saveNotificationSettings,
-  type EventType, type NotificationSettings,
-} from "../data/notificationSettings";
+import { useSelector } from "react-redux";
+import { Settings, MessageCircle, Mail, Send, Save, CheckCircle2, AlertTriangle } from "lucide-react";
+import { RootState } from "../redux";
 
-const TONES = ["professionnel et chaleureux", "formel", "simple et direct"];
-const SAMPLE: Record<string, string> = {
-  client: "Jean Dupont", trajet: "Toamasina → Mahajanga", date: "12/11/2026 08:00",
-  passagers: "2", total: "150 000 Ar", reference: "SJ-001", motif: "solde à régler",
+const API = (import.meta as any).env?.VITE_API_URL ?? "";
+
+type Form = {
+  whatsappNumber: string;
+  emailAddress: string;
+  whatsappEnabled: boolean;
+  emailEnabled: boolean;
+  events: string[];
 };
-const fill = (t: string) => t.replace(/\{(\w+)\}/g, (_, k) => SAMPLE[k] ?? `{${k}}`);
 
-// Sans onClose : affichage en page (menu latéral). Avec onClose : fenêtre superposée.
-const NotificationSettingsPanel: FC<{ onClose?: () => void }> = ({ onClose }) => {
-  const asPage = !onClose;
-  const [s, setS] = useState<NotificationSettings>(DEFAULT_SETTINGS);
+const EVENT_LABELS: Record<string, string> = {
+  "reservation.created": "Nouvelle réservation",
+  "reservation.auto_approved": "Réservation acceptée automatiquement",
+  "reservation.manual_review": "Demande en attente de validation",
+  "payment.received": "Paiement reçu",
+  "reservation.cancelled": "Réservation annulée",
+  "boat.maintenance": "Bateau en maintenance",
+};
+
+const PHONE_RE = /^\+[1-9]\d{7,14}$/;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const card = "bg-white rounded-xl border border-[#dbe5f5] shadow-sm";
+const input = "w-full border border-[#dbe5f5] rounded-lg px-3 py-2 text-xs bg-white";
+
+const call = async (path: string, init?: RequestInit) => {
+  const token = localStorage.getItem("token");
+  const res = await fetch(`${API}/api/notification-settings${path}`, {
+    credentials: "include",
+    ...init,
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(init?.headers ?? {}),
+    },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.message ?? "Erreur");
+  return data;
+};
+
+const Toggle: FC<{ checked: boolean; onChange: (v: boolean) => void; label: string }> = ({ checked, onChange, label }) => (
+  <label className="flex items-center gap-2 text-xs cursor-pointer">
+    <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} className="w-4 h-4 accent-[#1255d6]" />
+    {label}
+  </label>
+);
+
+const NotificationSettingsPanel: FC = () => {
+  const currentUser = useSelector((state: RootState) => state.users.currentUser);
+  const allowed = /propri|admin/i.test(String(currentUser?.role ?? ""));
+
+  const [form, setForm] = useState<Form>({
+    whatsappNumber: "", emailAddress: "", whatsappEnabled: false, emailEnabled: false, events: [],
+  });
+  const [saved, setSaved] = useState<Form | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [genBusy, setGenBusy] = useState(false);
-  const [active, setActive] = useState<EventType>("reservation.confirmed");
+  const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   useEffect(() => {
-    let off = false;
-    fetchNotificationSettings()
-      .then((r) => { if (!off) setS(r); })
-      .catch((e: Error) => { if (!off) setMsg({ ok: false, text: e.message }); })
-      .finally(() => { if (!off) setLoading(false); });
-    return () => { off = true; };
-  }, []);
+    if (!allowed) { setLoading(false); return; }
+    call("")
+      .then((d) => { setForm(d); setSaved(d); })
+      .catch((e) => setMsg({ ok: false, text: e.message }))
+      .finally(() => setLoading(false));
+  }, [allowed]);
 
-  const set = <K extends keyof NotificationSettings>(k: K, v: NotificationSettings[K]) => setS((c) => ({ ...c, [k]: v }));
-
-  const setTemplate = (field: "subject" | "body", value: string) =>
-    setS((c) => ({
-      ...c,
-      templates: { ...c.templates, [active]: { subject: c.templates[active]?.subject ?? "", body: c.templates[active]?.body ?? "", [field]: value } },
-    }));
-
-  const save = async () => {
-    setSaving(true);
-    setMsg(null);
-    try {
-      const r = await saveNotificationSettings(s);
-      setS(r);
-      setMsg({ ok: true, text: "Configuration enregistrée dans la base de données." });
-    } catch (e) {
-      setMsg({ ok: false, text: e instanceof Error ? e.message : "Enregistrement impossible." });
-    }
-    setSaving(false);
-  };
-
-  const generate = async () => {
-    setGenBusy(true);
-    setMsg(null);
-    const evs = EVENT_TYPES.filter((e) => s.events[e]);
-    const prompt = `Tu rédiges les messages automatiques de SAINT-JUDE (transport maritime, Madagascar). Ton : ${s.aiTone}. Langue : français.
-Pour chaque événement de cette liste : ${JSON.stringify(evs.map((e) => ({ event: e, description: EVENT_LABELS[e] })))}, écris {"subject":"objet court","body":"message de 4 à 7 lignes, utilisable par e-mail et WhatsApp"}.
-Tu peux utiliser UNIQUEMENT ces variables entre accolades : ${PLACEHOLDERS.map((p) => `{${p}}`).join(" ")}.
-N'écris aucune donnée réelle (nom, prix, numéro, date) : uniquement les variables. Dans les messages "en attente" et "refusé", ne confirme jamais la réservation.
-Réponds UNIQUEMENT en JSON : {"templates":{"<event>":{"subject":"","body":""}}}`;
-    try {
-      const r = await askAIJson<{ templates: Record<string, { subject?: string; body?: string }> }>(prompt);
-      if (!r || typeof r.templates !== "object") throw new Error("Réponse IA invalide.");
-      const next = { ...s.templates };
-      let n = 0;
-      evs.forEach((e) => {
-        const t = r.templates[e];
-        if (!t || typeof t.subject !== "string" || typeof t.body !== "string") return;
-        if (hasUnknownVars(t.subject) || hasUnknownVars(t.body)) return; // variable inventée par l'IA : ignorée
-        next[e] = { subject: t.subject.slice(0, 150), body: t.body.slice(0, 1500) };
-        n += 1;
-      });
-      set("templates", next);
-      setMsg(n ? { ok: true, text: `${n} message(s) proposé(s) par l'IA. Relisez-les, puis enregistrez.` } : { ok: false, text: "L'IA n'a rien proposé d'exploitable. Réessayez." });
-    } catch {
-      setMsg({ ok: false, text: "Le service IA n'a pas pu répondre. Vous pouvez écrire les messages à la main." });
-    }
-    setGenBusy(false);
-  };
-
-  const tpl = s.templates[active];
-  const field = "w-full border border-[#dbe5f5] rounded-lg px-3 py-2 text-xs bg-white";
-
-  const content = (
-    <div className="text-xs space-y-4 text-[#10285e]">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="text-base font-extrabold">Configuration des notifications</h3>
-          <p className="text-gray-500">Coordonnées de l'administrateur et messages automatiques (e-mail et WhatsApp).</p>
-        </div>
-        {onClose && (
-          <button type="button" aria-label="Fermer" onClick={onClose} className="text-gray-500 hover:text-gray-800"><X size={18} /></button>
-        )}
-      </div>
-
-      {loading ? (
-        <p className="text-gray-500 py-8 text-center">Chargement…</p>
-      ) : (
-        <>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <div className="border rounded-xl p-3 space-y-2">
-              <label className="flex items-center gap-2 font-semibold"><Mail size={14} className="text-[#1255d6]" /> E-mail administrateur</label>
-              <input className={field} type="email" placeholder="admin@exemple.com" value={s.adminEmail} onChange={(e) => set("adminEmail", e.target.value)} />
-              <label className="flex items-center gap-2"><input type="checkbox" checked={s.emailEnabled} onChange={(e) => set("emailEnabled", e.target.checked)} /> Recevoir par e-mail</label>
-            </div>
-            <div className="border rounded-xl p-3 space-y-2">
-              <label className="flex items-center gap-2 font-semibold"><MessageCircle size={14} className="text-[#0f9d78]" /> WhatsApp administrateur</label>
-              <input className={field} type="tel" placeholder="+261 34 00 000 00" value={s.adminWhatsapp} onChange={(e) => set("adminWhatsapp", e.target.value)} />
-              <label className="flex items-center gap-2"><input type="checkbox" checked={s.whatsappEnabled} onChange={(e) => set("whatsappEnabled", e.target.checked)} /> Recevoir par WhatsApp</label>
-            </div>
-          </div>
-
-          <div className="border rounded-xl p-3">
-            <p className="font-semibold mb-2">Événements notifiés</p>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-1.5">
-              {EVENT_TYPES.map((e) => (
-                <label key={e} className="flex items-center gap-2">
-                  <input type="checkbox" checked={s.events[e]} onChange={(ev) => set("events", { ...s.events, [e]: ev.target.checked })} />
-                  {EVENT_LABELS[e]}
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div className="border rounded-xl p-3 space-y-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <p className="font-semibold flex items-center gap-1.5 flex-1"><Brain size={14} className="text-[#7c3aed]" /> Messages rédigés par l'IA</p>
-              <select className="border rounded-md px-2 py-1 bg-[#f8fafd]" value={s.aiTone} onChange={(e) => set("aiTone", e.target.value)}>
-                {TONES.map((t) => <option key={t} value={t}>{t}</option>)}
-              </select>
-              <button type="button" onClick={generate} disabled={genBusy} className="flex items-center gap-1.5 bg-[#7c3aed] text-white font-semibold rounded-md px-3 py-1.5 disabled:opacity-50">
-                <Sparkles size={12} /> {genBusy ? "Rédaction…" : "Proposer avec l'IA"}
-              </button>
-            </div>
-            <p className="text-gray-500">
-              L'IA ne voit aucune donnée client : elle n'écrit que le modèle. Le serveur remplace les variables {PLACEHOLDERS.map((p) => `{${p}}`).join(" ")} au moment de l'envoi.
-            </p>
-            <div className="flex flex-wrap gap-1.5">
-              {EVENT_TYPES.map((e) => (
-                <button key={e} type="button" onClick={() => setActive(e)} className={`px-2.5 py-1 rounded-md border ${active === e ? "bg-[#1255d6] text-white border-[#1255d6]" : "bg-[#f8fafd] border-[#dbe5f5]"}`}>
-                  {EVENT_LABELS[e].split(" (")[0]}
-                </button>
-              ))}
-            </div>
-            <input className={field} placeholder="Objet du message" value={tpl?.subject ?? ""} onChange={(e) => setTemplate("subject", e.target.value)} />
-            <textarea className={`${field} min-h-[110px]`} placeholder="Texte du message (variables autorisées entre accolades)" value={tpl?.body ?? ""} onChange={(e) => setTemplate("body", e.target.value)} />
-            {(tpl?.subject || tpl?.body) && (
-              <div className="rounded-lg bg-[#eef4ff] p-3">
-                <p className="font-semibold text-[#1255d6] mb-1">Aperçu (exemple fictif)</p>
-                <p className="font-semibold">{fill(tpl?.subject ?? "")}</p>
-                <p className="whitespace-pre-line text-gray-700">{fill(tpl?.body ?? "")}</p>
-              </div>
-            )}
-            <p className="text-gray-500">Sans modèle enregistré pour un événement, le serveur utilise son message par défaut.</p>
-          </div>
-
-          {msg && (
-            <p className={`rounded-lg p-3 ${msg.ok ? "bg-[#eefaf5] text-[#0f9d78]" : "bg-[#ffe3e3] text-[#e5342f]"}`}>{msg.text}</p>
-          )}
-
-          <div className="flex justify-end gap-2">
-            {onClose && (
-              <button type="button" onClick={onClose} className="px-4 py-2 rounded-lg border border-[#dbe5f5]">Fermer</button>
-            )}
-            <button type="button" onClick={save} disabled={saving} className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[#1255d6] text-white font-semibold disabled:opacity-50">
-              <Save size={14} /> {saving ? "Enregistrement…" : "Enregistrer"}
-            </button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-
-  if (asPage) {
+  if (!allowed) {
     return (
-      <div className="p-5 bg-[#f3f7fd] min-h-full">
-        <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5 max-w-4xl">{content}</div>
+      <div className="p-5 text-xs text-[#b45309] bg-[#fff8ea] rounded-xl border border-[#f5d79a]">
+        Accès réservé au propriétaire et à l'administrateur.
       </div>
     );
   }
 
+  const phoneBad = form.whatsappNumber !== "" && !PHONE_RE.test(form.whatsappNumber);
+  const mailBad = form.emailAddress !== "" && !EMAIL_RE.test(form.emailAddress);
+  const changedContact =
+    saved !== null && (saved.whatsappNumber !== form.whatsappNumber || saved.emailAddress !== form.emailAddress);
+
+  const toggleEvent = (e: string) =>
+    setForm((f) => ({ ...f, events: f.events.includes(e) ? f.events.filter((x) => x !== e) : [...f.events, e] }));
+
+  const save = async () => {
+    if (changedContact && !window.confirm("Vous modifiez vos coordonnées de notification. Confirmer ?")) return;
+    setBusy(true);
+    setMsg(null);
+    try {
+      const d = await call("", { method: "PUT", body: JSON.stringify(form) });
+      setForm(d);
+      setSaved(d);
+      setMsg({ ok: true, text: "Paramètres enregistrés." });
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message });
+    }
+    setBusy(false);
+  };
+
+  const test = async (channel: "whatsapp" | "email") => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      await call("/test", { method: "POST", body: JSON.stringify({ channel }) });
+      setMsg({ ok: true, text: "Message de test envoyé." });
+    } catch (e: any) {
+      setMsg({ ok: false, text: e.message });
+    }
+    setBusy(false);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
-        {content}
+    <div className="p-5 bg-[#f3f7fd] min-h-full space-y-4 text-[#10285e]">
+      <div className="flex items-center gap-3">
+        <div className="w-11 h-11 rounded-xl bg-[#e0ecff] text-[#1255d6] flex items-center justify-center">
+          <Settings size={24} />
+        </div>
+        <div>
+          <h1 className="text-2xl font-extrabold leading-tight">Configuration</h1>
+          <p className="text-xs text-[#3e5788]">Notifications administratives (WhatsApp et e-mail).</p>
+        </div>
       </div>
+
+      {loading ? (
+        <p className="text-xs text-gray-500">Chargement…</p>
+      ) : (
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 max-w-5xl">
+          <div className={`${card} p-4 space-y-3`}>
+            <h3 className="font-bold text-sm flex items-center gap-2"><MessageCircle size={16} className="text-[#0f9d78]" /> WhatsApp administratif</h3>
+            <div>
+              <label className="text-[11px] font-semibold text-[#3e5788]">Numéro WhatsApp (format international)</label>
+              <input className={input} placeholder="+261340000000" value={form.whatsappNumber}
+                onChange={(e) => setForm({ ...form, whatsappNumber: e.target.value.trim() })} />
+              {phoneBad && <p className="text-[10px] text-[#e5342f] mt-1">Format attendu : + suivi de l'indicatif et du numéro.</p>}
+            </div>
+            <Toggle checked={form.whatsappEnabled} onChange={(v) => setForm({ ...form, whatsappEnabled: v })} label="Activer les notifications WhatsApp" />
+            <button type="button" disabled={busy || !saved?.whatsappNumber || changedContact} onClick={() => test("whatsapp")}
+              className="flex items-center gap-2 text-[11px] font-semibold text-[#1255d6] disabled:opacity-50">
+              <Send size={13} /> Envoyer un message de test
+            </button>
+          </div>
+
+          <div className={`${card} p-4 space-y-3`}>
+            <h3 className="font-bold text-sm flex items-center gap-2"><Mail size={16} className="text-[#1255d6]" /> E-mail administratif</h3>
+            <div>
+              <label className="text-[11px] font-semibold text-[#3e5788]">Adresse e-mail</label>
+              <input className={input} type="email" placeholder="admin@exemple.com" value={form.emailAddress}
+                onChange={(e) => setForm({ ...form, emailAddress: e.target.value.trim() })} />
+              {mailBad && <p className="text-[10px] text-[#e5342f] mt-1">Adresse e-mail invalide.</p>}
+            </div>
+            <Toggle checked={form.emailEnabled} onChange={(v) => setForm({ ...form, emailEnabled: v })} label="Activer les notifications e-mail" />
+            <button type="button" disabled={busy || !saved?.emailAddress || changedContact} onClick={() => test("email")}
+              className="flex items-center gap-2 text-[11px] font-semibold text-[#1255d6] disabled:opacity-50">
+              <Send size={13} /> Envoyer un e-mail de test
+            </button>
+          </div>
+
+          <div className={`${card} p-4 space-y-2 xl:col-span-2`}>
+            <h3 className="font-bold text-sm">Événements à notifier</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              {Object.entries(EVENT_LABELS).map(([k, label]) => (
+                <Toggle key={k} checked={form.events.includes(k)} onChange={() => toggleEvent(k)} label={label} />
+              ))}
+            </div>
+            <p className="text-[10px] text-gray-500">
+              Une notification envoyée n'est jamais une preuve de réservation confirmée : seul le backend valide.
+            </p>
+          </div>
+
+          <div className="xl:col-span-2 flex items-center gap-3">
+            <button type="button" onClick={save} disabled={busy || phoneBad || mailBad}
+              className="flex items-center gap-2 bg-[#1255d6] hover:bg-[#0e45b3] text-white text-xs font-semibold px-5 py-2 rounded-full disabled:opacity-50">
+              <Save size={14} /> Enregistrer les paramètres
+            </button>
+            {msg && (
+              <span className={`flex items-center gap-1 text-xs ${msg.ok ? "text-[#0f9d78]" : "text-[#e5342f]"}`}>
+                {msg.ok ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />} {msg.text}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

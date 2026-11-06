@@ -1,5 +1,5 @@
 import { FC, useState } from "react";
-import { Ship, Menu, X, LogOut } from "lucide-react";
+import { Ship, Menu, X, LogOut, Settings } from "lucide-react";
 import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { useDispatch, useSelector } from "react-redux";
@@ -11,6 +11,14 @@ interface SidebarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
 }
+
+// Entrée "Configuration" (WhatsApp et e-mail), ajoutée sous "Réservations multimodales"
+const configItem = {
+  id: "notificationSettings",
+  label: "Configuration",
+  icon: Settings,
+  description: "WhatsApp et e-mail",
+} as unknown as (typeof menuItems)[number];
 
 const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   const date = new Date();
@@ -26,9 +34,18 @@ const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
       ]
     : [];
 
-  const filteredMenu = menuItems.filter((item) =>
-    userPermissions.includes(item.permission)
+  const baseMenu = menuItems.filter(
+    (item) => item.id !== "notificationSettings" && userPermissions.includes(item.permission)
   );
+
+  // Visible uniquement pour le propriétaire et l'administrateur
+  const canConfig = /propri|admin/i.test(String(currentUser?.role ?? ""));
+  const idx = baseMenu.findIndex((item) => item.id === "reservations");
+  const filteredMenu = canConfig
+    ? idx >= 0
+      ? [...baseMenu.slice(0, idx + 1), configItem, ...baseMenu.slice(idx + 1)]
+      : [...baseMenu, configItem]
+    : baseMenu;
 
   const handleLogout = () => {
     dispatch(logout());
@@ -56,7 +73,6 @@ const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
         className={cn(
           "bg-sidebar border-r border-sidebar-border h-screen flex flex-col transition-all duration-300 fixed md:static top-0 left-0 z-50",
           isCollapsed ? "w-20" : "w-72",
-          // Mobile
           isMobileOpen ? "translate-x-0" : "-translate-x-full",
           "md:translate-x-0"
         )}
@@ -69,9 +85,7 @@ const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
                 <Ship className="h-6 w-6 text-sidebar-primary-foreground" />
               </div>
               <div>
-                <h1 className="text-lg font-semibold text-sidebar-foreground">
-                  SaintJUDE
-                </h1>
+                <h1 className="text-lg font-semibold text-sidebar-foreground">SaintJUDE</h1>
                 {currentUser && (
                   <p className="text-xs text-sidebar-foreground/70">
                     {`${currentUser.name} ${currentUser.lastName}`}
@@ -101,7 +115,7 @@ const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
                 key={item.id}
                 onClick={() => {
                   onTabChange(item.id);
-                  setIsMobileOpen(false); // ferme sur mobile
+                  setIsMobileOpen(false);
                 }}
                 className={`w-full flex items-center space-x-3 px-4 py-3 rounded-lg text-left transition-colors ${
                   isActive
