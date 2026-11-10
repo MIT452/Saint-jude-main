@@ -152,6 +152,9 @@ const normaliserTexte = (valeur?: string) =>
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase();
 
+// Première lettre en majuscule : « arcanum » → « Arcanum »
+const capitaliser = (valeur: string) => (valeur ? valeur.charAt(0).toUpperCase() + valeur.slice(1) : valeur);
+
 // Cherche un texte dans un objet : d'abord les clés connues, puis toute clé qui correspond au motif
 const trouverTexte = (source: unknown, cles: string[], motif: RegExp, exclure?: RegExp): string => {
   const record = source as Record<string, unknown> | undefined;
@@ -310,7 +313,7 @@ const exporterCsv = (lignes: string[][]) => {
   URL.revokeObjectURL(url);
 };
 
-const PAGE_SIZE = 8;
+const TAILLES_PAGE = [8, 20, 50];
 
 /* =========================
    Fenêtre « Ajouter paiement »
@@ -513,6 +516,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
   const [statusFilter, setStatusFilter] = useState<Filtre>('all');
   const [showFilters, setShowFilters] = useState(false);
   const [page, setPage] = useState(1);
+  const [taillePage, setTaillePage] = useState(TAILLES_PAGE[0]);
   const [selection, setSelection] = useState<string[]>([]);
   const [showAddGoodsModal, setShowAddGoodsModal] = useState(false);
   const [idReservation, setIdReservation] = useState<string>('');
@@ -546,18 +550,18 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     // Réservations dont toutes les marchandises ont été supprimées (0 Ar, rien payé) : on ne les affiche plus
     const idsAvecMarchandises = new Set(allGoods.map(({ reservationId }) => reservationId));
     return allReservation.filter((reservation) => {
-        const vide =
-          !idsAvecMarchandises.has(reservation.id) &&
-          !(Number(reservation.totalPrice) > 0) &&
-          !(Number(reservation.amountPaid) > 0);
-        if (vide) return false;
-        if (currentUser && currentUser.role === 'Capitaine') {
-          const trip = findTrip(reservation.tripId, alltrip);
-          const boat = trip ? findBoat(trip.boatId, allBoat) : undefined;
-          if (!boat || !boat.crew.includes(currentUser.id)) return false;
-        }
-        return true;
-      });
+      const vide =
+        !idsAvecMarchandises.has(reservation.id) &&
+        !(Number(reservation.totalPrice) > 0) &&
+        !(Number(reservation.amountPaid) > 0);
+      if (vide) return false;
+      if (currentUser && currentUser.role === 'Capitaine') {
+        const trip = findTrip(reservation.tripId, alltrip);
+        const boat = trip ? findBoat(trip.boatId, allBoat) : undefined;
+        if (!boat || !boat.crew.includes(currentUser.id)) return false;
+      }
+      return true;
+    });
   }, [allReservation, allGoods, allBoat, alltrip, currentUser]);
 
   const marchandisesVisibles = useMemo(() => {
@@ -582,15 +586,6 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
   const emojiNom = (nom: string) => emojiLocal(nom) || iconesIA[normaliserTexte(nom)] || '📦';
   const emojiMarchandise = (item: Goods) => iconeStockee(item) || emojiNom(nomMarchandise(item));
 
-  // Photo du premier bateau qui en possède une (bannière de droite)
-  const photoBanniere = useMemo(() => {
-    for (const bateau of allBoat) {
-      const photo = photoBateau(bateau);
-      if (photo) return photo;
-    }
-    return '';
-  }, [allBoat]);
-
   const filteredReservations = useMemo(() => {
     const search = searchTerm.toLowerCase();
     return reservationsVisibles.filter((reservation) => {
@@ -612,7 +607,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [reservationsVisibles, statusFilter, searchTerm, alltrip, marchandisesParReservation, allUser, currentUser]);
 
-  /* ----- Statistiques (calculées sur les marchandises visibles) ----- */
+  /* ----- Statistiques (cartes : nombre de marchandises ; tableau : nombre de réservations) ----- */
   const stats = useMemo(() => {
     const statutDe = new Map(reservationsVisibles.map((r) => [r.id, getStatutLigne(r).cle]));
     const total = marchandisesVisibles.length;
@@ -623,12 +618,19 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     const livrees = compter('TERMINEE');
     const pct = (valeur: number) => (total ? (valeur * 100) / total : 0);
 
-    const parType = new Map<string, number>();
+    // Regroupe « riz », « Riz » et « RIZ » (casse et accents ignorés)
+    const parType = new Map<string, { nom: string; nombre: number }>();
     marchandisesVisibles.forEach((item) => {
       const nom = nomMarchandise(item);
-      if (nom) parType.set(nom, (parType.get(nom) ?? 0) + 1);
+      const cle = normaliserTexte(nom).trim();
+      if (!cle) return;
+      const courant = parType.get(cle);
+      if (courant) courant.nombre += 1;
+      else parType.set(cle, { nom: capitaliser(nom.trim().toLowerCase()), nombre: 1 });
     });
-    const types = Array.from(parType.entries()).sort((a, b) => b[1] - a[1]);
+    const types: [string, number][] = Array.from(parType.values())
+      .map(({ nom, nombre }): [string, number] => [nom, nombre])
+      .sort((a, b) => b[1] - a[1]);
 
     const valeurTotale = reservationsVisibles
       .filter((r) => normaliserStatut(r.status as string | undefined) !== 'ANNULEE')
@@ -651,11 +653,11 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     reservationsVisibles.filter((reservation) => correspondAuFiltre(reservation, filtre)).length;
 
   /* ----- Pagination ----- */
-  const pageCount = Math.max(1, Math.ceil(filteredReservations.length / PAGE_SIZE));
+  const pageCount = Math.max(1, Math.ceil(filteredReservations.length / taillePage));
   const pageCourante = Math.min(page, pageCount);
-  const lignes = filteredReservations.slice((pageCourante - 1) * PAGE_SIZE, pageCourante * PAGE_SIZE);
-  const debut = filteredReservations.length === 0 ? 0 : (pageCourante - 1) * PAGE_SIZE + 1;
-  const fin = Math.min(pageCourante * PAGE_SIZE, filteredReservations.length);
+  const lignes = filteredReservations.slice((pageCourante - 1) * taillePage, pageCourante * taillePage);
+  const debut = filteredReservations.length === 0 ? 0 : (pageCourante - 1) * taillePage + 1;
+  const fin = Math.min(pageCourante * taillePage, filteredReservations.length);
 
   const toutesSelectionnees = lignes.length > 0 && lignes.every((reservation) => selection.includes(reservation.id));
 
@@ -719,6 +721,8 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
     setIdReservation(uuid());
   }, [showAddGoodsModal]);
 
+  const nbEnAttentePaiement = compteurFiltre('credit');
+
   return (
     <div className="min-h-screen relative text-gray-900 space-y-5">
       {/* ===== En-tête ===== */}
@@ -741,7 +745,11 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
               icone={<Ship className="h-6 w-6" />}
               titre="Total marchandises"
               valeur={stats.total}
-              pied={<span className="text-xs text-muted-foreground">{reservationsVisibles.length} réservation(s)</span>}
+              pied={
+                <span className="text-xs text-muted-foreground">
+                  dans {reservationsVisibles.length} réservation(s)
+                </span>
+              }
             />
             <CarteStat
               ton="green"
@@ -781,7 +789,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
             />
           </div>
 
-          {/* ===== Liste des marchandises ===== */}
+          {/* ===== Liste des réservations ===== */}
           <Card className="overflow-hidden">
             <CardContent className="p-0">
               <div className="flex flex-col gap-3 p-4 lg:flex-row lg:items-center lg:justify-between">
@@ -789,9 +797,14 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                   <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-blue-900 text-white">
                     <Package className="h-6 w-6" />
                   </span>
-                  <h3 className="text-lg font-semibold text-blue-900">
-                    Liste des marchandises ({filteredReservations.length})
-                  </h3>
+                  <div>
+                    <h3 className="text-lg font-semibold text-blue-900">
+                      Liste des réservations ({filteredReservations.length})
+                    </h3>
+                    <p className="text-xs text-muted-foreground">
+                      {stats.total} marchandise(s) au total · une ligne = une réservation
+                    </p>
+                  </div>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="relative w-full min-w-[220px] sm:w-72">
@@ -810,7 +823,8 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                     <Filter className="mr-2 h-4 w-4" /> Filtres
                   </Button>
                   <Button variant="outline" onClick={onExport} disabled={filteredReservations.length === 0}>
-                    <Download className="mr-2 h-4 w-4" /> Exporter
+                    <Download className="mr-2 h-4 w-4" />
+                    {selection.length ? `Exporter (${selection.length})` : 'Exporter'}
                   </Button>
                   <Button className="bg-blue-700 hover:bg-blue-800" onClick={() => setShowAddGoodsModal(true)}>
                     <Plus className="mr-2 h-4 w-4" /> Ajouter une marchandise
@@ -872,13 +886,21 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                       const trip = findTrip(reservation.tripId, alltrip);
                       const statut = getStatutLigne(reservation);
                       const etatPaiement = getEtatPaiement(reservation);
+                      const resteAPayer = Math.max(
+                        (Number(reservation.totalPrice) || 0) - (Number(reservation.amountPaid) || 0),
+                        0
+                      );
+                      const peutPayer =
+                        (etatPaiement === 'PARTIEL' || etatPaiement === 'CREDIT') &&
+                        resteAPayer > 0 &&
+                        normaliserStatut(reservation.status as string | undefined) !== 'REFUSEE';
                       const marchandises = marchandisesParReservation.get(reservation.id) ?? [];
                       const premierItem = marchandises[0];
                       const premier = premierItem ? nomMarchandise(premierItem) : '';
                       const emoji = premierItem ? emojiMarchandise(premierItem) : '📦';
                       const bateau = trip ? findBoat(trip.boatId, allBoat) : undefined;
                       const photo = photoBateau(bateau);
-                      const nomBateau = trouverTexte(bateau, ['name'], /^name$/i);
+                      const nomBateau = capitaliser(trouverTexte(bateau, ['name'], /^name$/i));
                       const supplement = marchandises.length > 1 ? ` +${marchandises.length - 1}` : '';
                       return (
                         <TableRow
@@ -910,7 +932,10 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                               )}
                               {trip ? (
                                 <div>
-                                  <p className="whitespace-nowrap font-medium">
+                                  <p
+                                    className="whitespace-nowrap font-medium"
+                                    title={`${trip.from} → ${trip.to}`}
+                                  >
                                     {formatCityName(trip.from)} → {formatCityName(trip.to)}
                                   </p>
                                   <p className="text-xs text-gray-500">
@@ -932,15 +957,17 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                               <PastilleMarchandise emoji={emoji} />
                               <div>
                                 <p className="font-semibold text-blue-900">
-                                  {premier ? `${premier}${supplement}` : 'Marchandise'}
+                                  {premier ? `${capitaliser(premier)}${supplement}` : 'Marchandise'}
                                 </p>
-                                <p className="text-xs text-gray-500">{reservation.clientName}</p>
+                                <p className="text-xs text-gray-500">Client : {reservation.clientName || '—'}</p>
                               </div>
                             </div>
                           </TableCell>
                           <TableCell>
                             <p>{trip ? formatCityName(trip.to) : '—'}</p>
-                            <p className="text-xs text-gray-500">{reservation.destName}</p>
+                            {reservation.destName && (
+                              <p className="text-xs text-gray-500">Destinataire : {reservation.destName}</p>
+                            )}
                           </TableCell>
                           <TableCell className="text-right">{Number(reservation.quantity)}</TableCell>
                           <TableCell className="text-right">{reservation.weight}</TableCell>
@@ -973,7 +1000,7 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
                               >
                                 <Eye className="h-4 w-4" />
                               </Button>
-                              {etatPaiement === 'PARTIEL' && (
+                              {peutPayer && (
                                 <Button
                                   size="icon"
                                   aria-label="Ajouter paiement"
@@ -1004,11 +1031,34 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
               )}
 
               <div className="flex flex-col items-center justify-between gap-3 p-4 text-sm text-muted-foreground sm:flex-row">
-                <span>
-                  {filteredReservations.length === 0
-                    ? 'Aucune marchandise'
-                    : `Affichage de ${debut} à ${fin} sur ${filteredReservations.length} marchandises`}
-                </span>
+                <div className="flex flex-wrap items-center gap-3">
+                  <span>
+                    {filteredReservations.length === 0
+                      ? 'Aucune réservation'
+                      : `Affichage de ${debut} à ${fin} sur ${filteredReservations.length} réservations`}
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <span>Lignes par page</span>
+                    <Select
+                      value={String(taillePage)}
+                      onValueChange={(valeur) => {
+                        setTaillePage(Number(valeur));
+                        setPage(1);
+                      }}
+                    >
+                      <SelectTrigger className="h-8 w-20 bg-white">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {TAILLES_PAGE.map((taille) => (
+                          <SelectItem key={taille} value={String(taille)}>
+                            {taille}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
                 <div className="flex items-center gap-1">
                   <Button
                     size="icon"
@@ -1049,21 +1099,25 @@ const MarchandiseManagementPage = ({ onOpenAssistant }: MarchandisePageProps) =>
 
         {/* ===== Colonne de droite ===== */}
         <div className="space-y-4">
-          <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-sky-500 to-blue-800 p-4 text-white shadow-md">
-            {photoBanniere ? (
-              <>
-                <img src={photoBanniere} alt="" className="absolute inset-0 h-full w-full object-cover" />
-                <div className="absolute inset-0 bg-gradient-to-r from-blue-900/90 via-blue-800/70 to-transparent" />
-              </>
-            ) : (
-              <Ship className="absolute -right-2 -top-2 h-24 w-24 text-white/15" />
-            )}
-            <p className="relative text-lg font-semibold leading-snug">
-              Les marchandises
-              <br />
-              au cœur de votre voyage
+          {/* Alerte utile à la place de la bannière décorative */}
+          <div className="rounded-xl bg-gradient-to-br from-orange-500 to-red-600 p-4 text-white shadow-md">
+            <p className="flex items-center gap-2 text-lg font-semibold leading-snug">
+              <Clock className="h-5 w-5" />
+              {nbEnAttentePaiement} réservation(s) en attente de paiement
             </p>
-            <p className="relative mt-1 text-sm text-blue-100">Un transport sûr, rapide et fiable.</p>
+            <p className="mt-1 text-sm text-orange-50">
+              {nbEnAttentePaiement > 0
+                ? 'Aucun paiement enregistré pour ces réservations.'
+                : 'Toutes les réservations ont au moins un paiement.'}
+            </p>
+            {nbEnAttentePaiement > 0 && (
+              <Button
+                className="mt-3 w-full bg-white text-orange-700 hover:bg-orange-50"
+                onClick={() => basculerFiltre('credit')}
+              >
+                {statusFilter === 'credit' ? 'Afficher toutes les réservations' : 'Voir ces réservations'}
+              </Button>
+            )}
           </div>
 
           <Card>
