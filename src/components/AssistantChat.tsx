@@ -41,6 +41,14 @@ const nowLabel = () =>
 
 const isCancelled = (status?: string) => strip(status ?? "").includes("annul");
 
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+/** Remplace les espaces fines / insécables (presque invisibles avec certaines polices) par une espace normale. */
+const normalizeSpaces = (text: string) => text.replace(/[\u202f\u00a0\u2009\u2007]/g, " ");
+
+// Une réponse instantanée paraît mécanique : durée minimale d'affichage de « écrit… »
+const MIN_TYPING_MS = 700;
+
 /* =========================================================
    Composant
    Toute la conversation (collecte, vérification du trajet, tarif, mémoire) est gérée
@@ -94,7 +102,8 @@ const QUICK_SUGGESTIONS: Array<{ label: string; message: string; icon: typeof Sh
 const makeWelcome = (): ChatMessage => ({
   id: newId(),
   role: "assistant",
-  content: "Bonjour ! 👋 Je suis votre assistant IA pour les réservations.",
+  content:
+    "Bonjour ! Dites-moi ce que vous souhaitez envoyer, ou posez-moi une question sur nos bateaux et nos voyages.",
   time: nowLabel(),
   welcome: true,
 });
@@ -224,7 +233,7 @@ export default function AssistantChat({
 
     // La réservation est enregistrée : on met l'interface à jour AVANT d'appeler le parent
     setPend(null);
-    push("assistant", out.reply, { success: true });
+    push("assistant", normalizeSpaces(out.reply), { success: true });
 
     // Un échec du composant parent ne doit pas faire croire que la réservation a échoué
     try {
@@ -322,10 +331,13 @@ export default function AssistantChat({
     }
 
     // D. Tout le reste : conversation avec l'agent (mémoire, outils, vérification SQL)
+    const started = Date.now();
     const out = await agentChat(message, convIdRef.current);
+    // Rythme plus humain : « écrit… » reste visible un court instant avant la réponse
+    await sleep(Math.max(0, MIN_TYPING_MS - (Date.now() - started)));
     convIdRef.current = out.conversationId;
     setPend(out.pending);
-    push("assistant", out.reply, { md: true });
+    push("assistant", normalizeSpaces(out.reply), { md: true });
   };
 
   const submitMessage = async (message: string, byVoice: boolean) => {
@@ -445,13 +457,12 @@ export default function AssistantChat({
 
                     {m.welcome && (
                       <div className="mt-2">
-                        <p>Vous pouvez me poser des questions comme :</p>
+                        <p>Par exemple, vous pouvez me demander :</p>
                         <ul className="my-1.5 list-disc space-y-1 pl-5">
                           {WELCOME_EXAMPLES.map((ex) => (
                             <li key={ex}>“{ex}”</li>
                           ))}
                         </ul>
-                        <p>Je suis là pour vous aider !</p>
                       </div>
                     )}
 
