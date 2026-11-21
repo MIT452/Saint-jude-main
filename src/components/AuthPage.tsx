@@ -4,7 +4,7 @@ import { useDispatch } from "react-redux";
 import { AppDispatch } from "../redux";
 import { setCurrentUser } from "../redux/feature/users";
 import {
-  Anchor, ArrowRight, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, MapPin, Phone,
+  Anchor, ArrowRight, Camera, Check, Eye, EyeOff, Lock, LogIn, Mail, Phone,
   Ship, ShieldCheck, User, UserPlus, Users,
 } from "lucide-react";
 import { loginUser, registerUser } from "../data/service";
@@ -14,17 +14,14 @@ import type { Role } from "../data/service";
    Laisser "" tant que le fichier n'existe pas dans public/images/.
    Ex. : const LOGIN_PHOTO = "login-bg.jpg";  (puis ajouter public/images/login-bg.jpg) */
 const LOGIN_PHOTO = "";
-const REGISTER_PHOTO = "";
-const REGISTER_IMAGE = "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1600&q=85";
+const REGISTER_IMAGE = "https://images.unsplash.com/photo-1578575437130-527eed3abbec?auto=format&fit=crop&w=1600&q=85";
 
 const BASE = (import.meta.env.BASE_URL as string | undefined) ?? "/";
 const photoUrl = (file: string) => `url(${BASE}images/${file})`;
 // Ajoute la photo seulement si un fichier est défini, sinon dégradé seul (aucun 404)
 const withPhoto = (file: string, fallback: string) => (file ? `${photoUrl(file)}, ${fallback}` : fallback);
 
-const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
-const LOGIN_BG = withPhoto(LOGIN_PHOTO, SEA);
-const BANNER_BG = withPhoto(REGISTER_PHOTO, SEA);
+const LOGIN_BG = withPhoto(LOGIN_PHOTO, `linear-gradient(180deg,rgba(9,43,100,.12),rgba(4,39,100,.34)), url("${REGISTER_IMAGE}")`);
 
 // Rôles proposés à l'inscription : Propriétaire, Admin, Gestionnaire.
 // Chaque rôle est protégé par un code d'accès vérifié côté serveur (voir backend).
@@ -43,7 +40,11 @@ const RULES: Array<[string, (p: string) => boolean]> = [
 ];
 const isStrong = (p: string) => RULES.every(([, ok]) => ok(p));
 
-const script = { fontFamily: "'Brush Script MT','Segoe Script',cursive" } as const;
+// Numéro malgache : 034 12 345 67, 0341234567, +261 34 12 345 67 ou 261341234567
+const isMgPhone = (v: string) => {
+  const d = v.replace(/\D/g, "");
+  return /^261\d{9}$/.test(d) || /^0\d{9}$/.test(d);
+};
 
 const photoKey = (id: unknown) => `profilePhoto:${String(id ?? "")}`;
 
@@ -82,17 +83,6 @@ const Logo = () => (
       <p className="text-3xl font-extrabold tracking-wide">SAINT-JUDE</p>
       <p className="text-lg tracking-wider">Transport Maritime</p>
     </div>
-  </div>
-);
-
-const Tagline = () => (
-  <div className="text-white/95" style={script}>
-    <p className="text-2xl md:text-3xl -rotate-6 leading-snug">
-      Plus qu'un transport,
-      <br />
-      <span className="ml-8">une connexion</span>
-      <Anchor size={26} className="inline-block ml-2 rotate-6" />
-    </p>
   </div>
 );
 
@@ -217,6 +207,10 @@ const AuthPage = () => {
         setError("Le mot de passe ne respecte pas les règles de sécurité.");
         return;
       }
+      if (!isMgPhone(tel)) {
+        setError("Numéro de téléphone invalide (exemple : 034 12 345 67).");
+        return;
+      }
       if (!role || !ROLE_OPTIONS.some((r) => r.value === role)) {
         setError("Veuillez sélectionner un rôle valide.");
         return;
@@ -274,22 +268,29 @@ const AuthPage = () => {
   /* ============================ INSCRIPTION ============================ */
   if (isRegistering) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-[#eaf4ff] to-[#d9eafc] flex flex-col">
-        <div
-          className="relative h-[230px] md:h-[260px] overflow-hidden"
-          style={{ backgroundImage: BANNER_BG, backgroundSize: "cover", backgroundPosition: "center" }}
-        >
-          <div className="absolute inset-0 bg-gradient-to-b from-[#0d4aa8]/40 to-transparent" />
-          <div className="relative max-w-6xl mx-auto px-6 pt-8 flex items-start justify-between gap-4">
-            <Logo />
-            <div className="hidden md:block pt-2">
-              <Tagline />
+      <div
+        className="min-h-screen bg-[#0b4b9b] bg-cover bg-center bg-fixed"
+        style={{ backgroundImage: LOGIN_BG }}
+      >
+        <div className="relative min-h-screen max-w-7xl mx-auto grid grid-cols-1 lg:grid-cols-[.9fr_1.1fr] items-center gap-5 px-4 py-6 md:px-8 lg:gap-10">
+          <div className="relative hidden min-h-[680px] overflow-hidden rounded-3xl border border-white/40 shadow-2xl lg:order-1 lg:block">
+            <img
+              src={REGISTER_IMAGE}
+              alt="Bateau naviguant sur une mer turquoise"
+              className="absolute inset-0 h-full w-full object-cover"
+            />
+            <div className="absolute inset-0 bg-gradient-to-t from-[#062c58]/90 via-[#075985]/25 to-[#087ca8]/20" />
+            <div className="relative flex min-h-[680px] flex-col justify-between p-8 text-white">
+              <Logo />
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100">SAINT-JUDE · Madagascar</p>
+                <h2 className="mt-3 max-w-sm text-4xl font-extrabold leading-tight">Relier les îles, rapprocher les hommes.</h2>
+                <p className="mt-3 text-white/90">Transport maritime de marchandises · Antalaha ↔ Toamasina</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="relative max-w-6xl w-full mx-auto px-4 md:px-6 -mt-16 grid grid-cols-1 lg:grid-cols-[1.1fr_1fr] gap-6 pb-10 flex-1">
-          <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-xl border border-[#dbe5f5] p-6 md:p-8 space-y-5">
+          <form onSubmit={handleSubmit} className="w-full max-w-[650px] justify-self-center rounded-3xl border border-white/70 bg-white/95 p-5 shadow-2xl backdrop-blur md:p-7 lg:order-2">
             <div className="text-center">
               <div className="mx-auto w-16 h-16 rounded-full bg-[#1255d6] text-white flex items-center justify-center shadow-md -mt-14 md:-mt-16 mb-3 ring-4 ring-white">
                 <UserPlus size={30} />
@@ -310,16 +311,18 @@ const AuthPage = () => {
                 <button
                   type="button"
                   onClick={() => fileRef.current?.click()}
-                  title="Choisir une photo"
+                  title="Explorer les fichiers pour choisir une photo"
+                  aria-label="Explorer les fichiers pour choisir une photo de profil"
                   className="absolute bottom-0 right-0 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white"
                 >
                   <Camera size={16} />
                 </button>
-                <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} className="hidden" />
+                <input ref={fileRef} type="file" accept="image/jpeg,image/png,image/webp" onChange={onPhoto} className="hidden" aria-label="Choisir une photo de profil" />
               </div>
-              <button type="button" onClick={() => fileRef.current?.click()} className="text-xs text-[#1255d6] hover:underline">
-                {photo ? "Changer la photo" : "Ajouter une photo (facultatif)"}
+              <button type="button" onClick={() => fileRef.current?.click()} className="rounded-lg bg-[#1255d6] px-4 py-2 text-xs font-semibold text-white hover:bg-[#0e45b3]">
+                {photo ? "Changer la photo" : "Explorer le fichier"}
               </button>
+              <p className="text-[11px] text-[#3e5788]">Photo de profil facultative · JPG, PNG ou WEBP · 8 Mo maximum</p>
               {photoError && <p className="text-xs text-red-600">{photoError}</p>}
             </div>
 
@@ -329,7 +332,7 @@ const AuthPage = () => {
             </div>
 
             <Field id="email" label="Adresse e-mail" icon={<Mail size={17} />} type="email" value={login} onChange={setLogin} placeholder="exemple@domaine.com" autoComplete="email" />
-            <Field id="tel" label="Téléphone" icon={<Phone size={17} />} type="tel" value={tel} onChange={setTel} placeholder="+261 34 12 34 567" autoComplete="tel" />
+            <Field id="tel" label="Téléphone" icon={<Phone size={17} />} type="tel" value={tel} onChange={setTel} placeholder="034 12 345 67" autoComplete="tel" />
 
             {/* ---------- Sélecteur de rôle : Propriétaire / Admin / Gestionnaire ---------- */}
             <div>
@@ -450,30 +453,8 @@ const AuthPage = () => {
             </div>
           </form>
 
-          <div className="relative min-h-[420px] lg:min-h-[680px] overflow-hidden rounded-2xl border border-white/60 bg-[#075985] shadow-lg">
-            <img
-              src={REGISTER_IMAGE}
-              alt="Bateau naviguant sur une mer turquoise"
-              className="absolute inset-0 h-full w-full object-cover"
-            />
-            <div className="absolute inset-0 bg-gradient-to-t from-[#062c58]/85 via-[#075985]/10 to-[#087ca8]/20" />
-            <div
-              aria-hidden="true"
-              className="absolute inset-x-0 top-0 h-36 bg-gradient-to-r from-[#37a5e8]/90 to-[#0b5db7]/80"
-              style={{ clipPath: "ellipse(86% 78% at 50% 0%)" }}
-            />
-            <div className="relative flex min-h-[420px] flex-col justify-end p-6 text-white lg:min-h-[680px]">
-              <p className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-100">SAINT-JUDE · Madagascar</p>
-              <h2 className="mt-2 max-w-sm text-3xl font-extrabold leading-tight">Relier les îles, rapprocher les hommes.</h2>
-              <p className="mt-2 text-sm text-white/85">Antalaha ↔ Toamasina</p>
-            </div>
-          </div>
         </div>
 
-        <div className="bg-gradient-to-r from-[#0d4aa8] to-[#1255d6] text-white text-sm py-4 text-center">
-          <Ship size={22} className="inline-block mr-2 -mt-1" />
-          SAINT-JUDE <span className="mx-2">—</span> Transport Maritime Antalaha ↔ Toamasina
-        </div>
       </div>
     );
   }
@@ -481,32 +462,19 @@ const AuthPage = () => {
   /* ============================ CONNEXION ============================ */
   return (
     <div className="relative min-h-screen overflow-hidden" style={{ backgroundImage: LOGIN_BG, backgroundSize: "cover", backgroundPosition: "center" }}>
-      <div className="absolute top-8 left-8 md:left-14">
-        <Logo />
-      </div>
-      <div className="hidden lg:block absolute top-44 left-24">
-        <Tagline />
-      </div>
-      <Anchor size={72} className="hidden md:block absolute top-8 right-10 text-white/35 rotate-12" />
-      <div className="hidden md:flex absolute bottom-8 left-8 md:left-14 items-start gap-2 text-white">
-        <MapPin size={22} className="mt-0.5" />
-        <div className="leading-tight">
-          <p className="font-semibold">Saint-Jude — Madagascar</p>
-          <p className="text-xs">Relier les îles, rapprocher les hommes</p>
-        </div>
-      </div>
-
-      <div className="relative min-h-screen flex items-center justify-center lg:justify-end px-4 pt-28 pb-10 lg:pt-0 lg:pr-[7%]">
-        <form onSubmit={handleSubmit} className="w-full max-w-[560px] bg-white/95 rounded-2xl shadow-2xl p-7 md:p-10 space-y-5">
+      <div className="relative min-h-screen flex items-center justify-center px-4 py-8">
+        <form onSubmit={handleSubmit} className="w-full max-w-[640px] rounded-[28px] border border-white/80 bg-white/95 p-6 shadow-2xl backdrop-blur md:p-10 space-y-5">
           <div className="text-center">
-            <div className="mx-auto w-20 h-20 rounded-full bg-[#dcebfb] text-[#1255d6] flex items-center justify-center">
-              <Ship size={38} />
+            <div className="mx-auto flex h-24 w-24 items-center justify-center rounded-full bg-[#e8f3ff] text-[#1255d6] ring-1 ring-[#bfdafa]">
+              <Anchor size={52} strokeWidth={1.7} />
             </div>
-            <h1 className="mt-4 text-3xl font-extrabold text-[#0b3aa8]">Bienvenue sur SAINT-JUDE</h1>
+            <p className="mt-2 text-sm font-bold tracking-[0.16em] text-[#0b3aa8]">SAINT JUDE</p>
+            <p className="text-xs italic text-[#3e5788]">Transport Maritime Antalaha ↔ Toamasina</p>
+            <h1 className="mt-4 text-3xl font-extrabold text-[#101b3c]">Bienvenue sur <span className="text-[#1255d6]">Saint Jude</span></h1>
             <p className="text-[#3e5788] mt-2">Gestion du transport maritime de marchandises</p>
           </div>
 
-          <Field id="email" label="Adresse e-mail" icon={<Mail size={17} />} labelIcon type="email" value={login} onChange={setLogin} placeholder="Entrez votre adresse e-mail" autoComplete="email" />
+          <Field id="login" label="E-mail ou téléphone" icon={<Mail size={17} />} labelIcon type="text" value={login} onChange={setLogin} placeholder="exemple@domaine.com ou 034 12 345 67" autoComplete="username" />
           <div>
             <PwdField
               id="password"
@@ -548,11 +516,8 @@ const AuthPage = () => {
           </p>
 
           <div className="border-t border-[#dbe5f5] pt-4 flex items-center justify-center gap-3 text-[#3e5788]">
-            <ShieldCheck size={30} className="text-[#1255d6]" />
-            <div className="leading-tight">
-              <p className="text-sm font-medium">Connexion sécurisée et protégée</p>
-              <p className="text-xs">Vos données sont chiffrées et en sécurité.</p>
-            </div>
+            <Anchor size={26} className="text-[#1255d6]" />
+            <p className="text-sm italic">Saint Jude · Transport Maritime Antalaha ↔ Toamasina</p>
           </div>
         </form>
       </div>
