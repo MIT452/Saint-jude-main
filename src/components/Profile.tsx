@@ -1,14 +1,16 @@
 // src/components/Profile.tsx
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChangeEvent, ReactNode } from "react";
 import { useDispatch, useSelector } from "react-redux";
 import type { RootState, AppDispatch } from "../redux";
 import { updateOwnPassword } from "../redux/feature/users";
 import {
   Search, Bell, ChevronDown, Calendar, User, UserCircle2, Camera, Mail, Phone, Shield, ShieldCheck, Lock, Eye, EyeOff,
-  Check, Lightbulb, Ship, Anchor,
+  Check, Lightbulb, Ship, Anchor, KeyRound, Copy, RefreshCw, Trash2,
 } from "lucide-react";
 import { toast } from "react-toastify";
+import { disableRoleCode, fetchRoleCodes, generateRoleCode } from "../data/roleCodes";
+import type { CodeRole, GeneratedCode, RoleCodeInfo } from "../data/roleCodes";
 
 const pad = (n: number) => String(n).padStart(2, "0");
 const pick = (u: any, ...keys: string[]) => { for (const k of keys) if (u?.[k] !== undefined && u[k] !== null && u[k] !== "") return u[k]; return undefined; };
@@ -81,6 +83,159 @@ const PwdField = ({ label, placeholder, value, onChange, error }: { label: strin
   );
 };
 
+/* ---------- Codes d'accès des rôles (Propriétaire / Administrateur) ---------- */
+const CODE_ROLES: Array<{ role: CodeRole; label: string }> = [
+  { role: "gestionnaire", label: "Gestionnaire" },
+  { role: "capitaine", label: "Capitaine" },
+];
+
+const formatDate = (iso: string | null | undefined) => {
+  if (!iso) return "Sans expiration";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+};
+
+const RoleCodesCard = () => {
+  const [codes, setCodes] = useState<RoleCodeInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyRole, setBusyRole] = useState<CodeRole | null>(null);
+  const [days, setDays] = useState<Record<CodeRole, number>>({ gestionnaire: 30, capitaine: 30 });
+  const [generated, setGenerated] = useState<GeneratedCode | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setCodes(await fetchRoleCodes());
+    } catch {
+      toast("Impossible de charger les codes d'accès.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const infoFor = (role: CodeRole) => codes.find((c) => c.role === role);
+
+  const handleGenerate = async (role: CodeRole) => {
+    try {
+      setBusyRole(role);
+      const result = await generateRoleCode(role, days[role]);
+      setGenerated(result);
+      await load();
+      toast("Nouveau code généré. Copiez-le maintenant.");
+    } catch {
+      toast("Échec de la génération du code.");
+    } finally {
+      setBusyRole(null);
+    }
+  };
+
+  const handleDisable = async (role: CodeRole) => {
+    try {
+      setBusyRole(role);
+      await disableRoleCode(role);
+      if (generated?.role === role) setGenerated(null);
+      await load();
+      toast("Code désactivé.");
+    } catch {
+      toast("Échec de la désactivation.");
+    } finally {
+      setBusyRole(null);
+    }
+  };
+
+  const copyCode = async () => {
+    if (!generated) return;
+    try {
+      await navigator.clipboard.writeText(generated.code);
+      toast("Code copié.");
+    } catch {
+      toast("Copie impossible : sélectionnez le code manuellement.");
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5">
+      <h3 className="text-lg font-bold text-[#0b3aa8] flex items-center gap-3 mb-4">
+        <KeyRound size={22} className="text-[#1255d6]" /> Codes d'accès des rôles
+      </h3>
+      <div className="flex items-center gap-3 bg-[#eaf3ff] border border-[#c7defa] rounded-lg px-4 py-3 text-xs text-[#1d4fb8] mb-4">
+        <ShieldCheck size={26} className="shrink-0" />
+        <p>
+          Ces codes permettent à un nouvel utilisateur de s'inscrire comme Gestionnaire ou Capitaine. Le rôle Agent est libre. Le code n'est
+          affiché qu'une seule fois : seule son empreinte est conservée. Les rôles Propriétaire et Administrateur ne s'obtiennent jamais par code.
+        </p>
+      </div>
+
+      {generated && (
+        <div className="mb-4 rounded-lg border border-[#1fae6a] bg-[#e9f9f0] p-4">
+          <p className="text-sm font-semibold text-[#14894f]">
+            Code {generated.role === "capitaine" ? "Capitaine" : "Gestionnaire"} — expire le {formatDate(generated.expiresAt)}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <code className="flex-1 rounded-md bg-white border border-[#b9e5cd] px-3 py-2 text-base font-bold tracking-wider text-[#10285e] break-all">{generated.code}</code>
+            <button onClick={copyCode} className="h-10 px-3 rounded-md bg-[#14894f] text-white text-sm font-semibold flex items-center gap-2 hover:brightness-110">
+              <Copy size={15} /> Copier
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-[#14894f]">Notez-le maintenant : il ne sera plus affiché après fermeture de cette carte ou de la page.</p>
+          <button onClick={() => setGenerated(null)} className="mt-1 text-xs text-[#1255d6] hover:underline">Masquer le code</button>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {CODE_ROLES.map(({ role, label }) => {
+          const info = infoFor(role);
+          const expired = !!info?.expiresAt && new Date(info.expiresAt).getTime() < Date.now();
+          const active = !!info?.isActive && !expired;
+          const busy = busyRole === role;
+          return (
+            <div key={role} className="rounded-lg border border-[#cfdcf3] p-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="font-semibold text-[#10285e] w-28">{label}</span>
+                <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${active ? "bg-[#d9f5e6] text-[#14894f]" : "bg-[#fde8e8] text-[#b42318]"}`}>
+                  {loading ? "Chargement…" : active ? "Actif" : expired ? "Expiré" : "Aucun code actif"}
+                </span>
+                {active && <span className="text-xs text-[#3e5788]">Expire le {formatDate(info?.expiresAt)}</span>}
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <select
+                  value={days[role]}
+                  onChange={(e) => setDays((d) => ({ ...d, [role]: Number(e.target.value) }))}
+                  className="h-10 rounded-lg border border-[#cfdcf3] bg-white px-3 text-sm text-[#10285e] outline-none"
+                >
+                  <option value={7}>Valable 7 jours</option>
+                  <option value={30}>Valable 30 jours</option>
+                  <option value={90}>Valable 90 jours</option>
+                </select>
+                <button
+                  onClick={() => handleGenerate(role)}
+                  disabled={busy}
+                  className="h-10 px-4 rounded-lg bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold flex items-center gap-2 disabled:opacity-60"
+                >
+                  <RefreshCw size={15} /> {active ? "Renouveler le code" : "Générer un code"}
+                </button>
+                {active && (
+                  <button
+                    onClick={() => handleDisable(role)}
+                    disabled={busy}
+                    className="h-10 px-4 rounded-lg border border-red-300 text-red-600 text-sm font-semibold flex items-center gap-2 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    <Trash2 size={15} /> Désactiver
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
 const Profile = () => {
   const dispatch = useDispatch<AppDispatch>();
   const currentUser = useSelector((state: RootState) => state.users.currentUser);
@@ -146,6 +301,7 @@ const Profile = () => {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const canSubmit = !!oldPassword.trim() && isStrong(newPassword) && newPassword === confirmPassword && !busy;
+  const isOwnerOrAdmin = /propri|admin/i.test(String(currentUser.role ?? ""));
 
   const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -259,6 +415,9 @@ const Profile = () => {
               {success && <p className="text-green-600 text-sm">{success}</p>}
             </div>
           </div>
+
+          {/* Codes d'accès : Propriétaire / Administrateur uniquement */}
+          {isOwnerOrAdmin && <RoleCodesCard />}
         </div>
 
         {/* Colonne droite */}
