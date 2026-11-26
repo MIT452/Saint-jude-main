@@ -83,11 +83,14 @@ const PwdField = ({ label, placeholder, value, onChange, error }: { label: strin
   );
 };
 
-/* ---------- Codes d'accès des rôles (Propriétaire / Administrateur) ---------- */
+/* ---------- Codes d'accès des rôles (Propriétaire uniquement) ---------- */
 const CODE_ROLES: Array<{ role: CodeRole; label: string }> = [
   { role: "gestionnaire", label: "Gestionnaire" },
   { role: "capitaine", label: "Capitaine" },
+  { role: "admin", label: "Administrateur" },
+  { role: "proprietaire", label: "Propriétaire" },
 ];
+const roleLabel = (role: CodeRole) => CODE_ROLES.find((r) => r.role === role)?.label ?? role;
 
 const formatDate = (iso: string | null | undefined) => {
   if (!iso) return "Sans expiration";
@@ -100,7 +103,7 @@ const RoleCodesCard = () => {
   const [codes, setCodes] = useState<RoleCodeInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyRole, setBusyRole] = useState<CodeRole | null>(null);
-  const [days, setDays] = useState<Record<CodeRole, number>>({ gestionnaire: 30, capitaine: 30 });
+  const [days, setDays] = useState<Record<CodeRole, number>>({ gestionnaire: 30, capitaine: 30, admin: 30, proprietaire: 30 });
   const [generated, setGenerated] = useState<GeneratedCode | null>(null);
 
   const load = useCallback(async () => {
@@ -165,15 +168,15 @@ const RoleCodesCard = () => {
       <div className="flex items-center gap-3 bg-[#eaf3ff] border border-[#c7defa] rounded-lg px-4 py-3 text-xs text-[#1d4fb8] mb-4">
         <ShieldCheck size={26} className="shrink-0" />
         <p>
-          Ces codes permettent à un nouvel utilisateur de s'inscrire comme Gestionnaire ou Capitaine. Le rôle Agent est libre. Le code n'est
-          affiché qu'une seule fois : seule son empreinte est conservée. Les rôles Propriétaire et Administrateur ne s'obtiennent jamais par code.
+          Ces codes permettent à un nouvel utilisateur de s'inscrire avec le rôle correspondant. Le rôle Agent est libre. Le code n'est affiché
+          qu'une seule fois : seule son empreinte est conservée dans la base. Ne partagez le code Propriétaire ou Administrateur qu'avec des personnes de confiance.
         </p>
       </div>
 
       {generated && (
         <div className="mb-4 rounded-lg border border-[#1fae6a] bg-[#e9f9f0] p-4">
           <p className="text-sm font-semibold text-[#14894f]">
-            Code {generated.role === "capitaine" ? "Capitaine" : "Gestionnaire"} — expire le {formatDate(generated.expiresAt)}
+            Code {roleLabel(generated.role)} — expire le {formatDate(generated.expiresAt)}
           </p>
           <div className="mt-2 flex items-center gap-2">
             <code className="flex-1 rounded-md bg-white border border-[#b9e5cd] px-3 py-2 text-base font-bold tracking-wider text-[#10285e] break-all">{generated.code}</code>
@@ -195,7 +198,7 @@ const RoleCodesCard = () => {
           return (
             <div key={role} className="rounded-lg border border-[#cfdcf3] p-3">
               <div className="flex flex-wrap items-center gap-3">
-                <span className="font-semibold text-[#10285e] w-28">{label}</span>
+                <span className="font-semibold text-[#10285e] w-32">{label}</span>
                 <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${active ? "bg-[#d9f5e6] text-[#14894f]" : "bg-[#fde8e8] text-[#b42318]"}`}>
                   {loading ? "Chargement…" : active ? "Actif" : expired ? "Expiré" : "Aucun code actif"}
                 </span>
@@ -301,7 +304,7 @@ const Profile = () => {
   const now = new Date();
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const canSubmit = !!oldPassword.trim() && isStrong(newPassword) && newPassword === confirmPassword && !busy;
-  const isOwnerOrAdmin = /propri|admin/i.test(String(currentUser.role ?? ""));
+  const isOwner = /propri/i.test(String(currentUser.role ?? ""));
 
   const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -416,8 +419,8 @@ const Profile = () => {
             </div>
           </div>
 
-          {/* Codes d'accès : Propriétaire / Administrateur uniquement */}
-          {isOwnerOrAdmin && <RoleCodesCard />}
+          {/* Codes d'accès : Propriétaire uniquement */}
+          {isOwner && <RoleCodesCard />}
         </div>
 
         {/* Colonne droite */}
