@@ -25,18 +25,21 @@ const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
 const LOGIN_BG = LOGIN_PHOTO ? `url(${photoUrl(LOGIN_PHOTO)}), ${SEA}` : SEA;
 const SHIP_SRC = SHIP_PHOTO ? photoUrl(SHIP_PHOTO) : SHIP_FALLBACK;
 
-/* Rôles proposés à l'inscription (système mixte) :
+/* Rôles proposés à l'inscription :
    - Agent : inscription publique, sans code
-   - Gestionnaire / Capitaine : code d'invitation fourni par le Propriétaire
-   - Administrateur / Propriétaire : jamais via l'inscription (attribués par un Propriétaire) */
+   - Gestionnaire / Capitaine / Administrateur / Propriétaire : code d'accès obligatoire
+     (toujours revérifié côté serveur) */
 const DEFAULT_ROLE = "agent" as Role;
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: "agent" as Role, label: "Agent" },
   { value: "gestionnaire" as Role, label: "Gestionnaire" },
   { value: "capitaine" as Role, label: "Capitaine" },
+  { value: "admin" as Role, label: "Administrateur" },
+  { value: "proprietaire" as Role, label: "Propriétaire" },
 ];
-const ROLES_WITH_CODE: string[] = ["gestionnaire", "capitaine"];
+const ROLES_WITH_CODE: string[] = ["gestionnaire", "capitaine", "admin", "proprietaire"];
 const needsCode = (r: Role) => ROLES_WITH_CODE.includes(String(r));
+const roleLabel = (r: Role) => ROLE_OPTIONS.find((o) => String(o.value) === String(r))?.label ?? String(r);
 
 const MAX_PHOTO = 2 * 1024 * 1024; // 2 Mo
 const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png"];
@@ -228,9 +231,11 @@ const AuthPage = () => {
     }
   };
 
+  // Changer de rôle efface le code saisi (il était destiné à un autre rôle)
   const handleRoleChange = (value: Role) => {
     setRole(value);
-    if (!needsCode(value)) setRoleCode("");
+    setRoleCode("");
+    setError("");
   };
 
   const handleSubmit = async (e: FormEvent) => {
@@ -240,7 +245,7 @@ const AuthPage = () => {
       if (password !== confirmPassword) return setError("Les mots de passe ne correspondent pas.");
       if (!isStrong(password)) return setError("Le mot de passe ne respecte pas les règles de sécurité.");
       if (!isMgLocal(tel)) return setError("Numéro invalide (exemple : 34 12 345 67).");
-      if (codeRequired && !roleCode.trim()) return setError("Le code d'invitation du rôle est obligatoire.");
+      if (codeRequired && !roleCode.trim()) return setError(`Le code d'accès du rôle ${roleLabel(role)} est obligatoire.`);
     }
 
     setIsSubmitting(true);
@@ -409,12 +414,12 @@ const AuthPage = () => {
                 {!codeRequired && <p className="mt-1 text-xs text-[#3e5788]">Compte Agent : aucun code requis.</p>}
               </div>
 
-              {/* Code d'invitation : Gestionnaire / Capitaine */}
+              {/* Code d'accès : Gestionnaire / Capitaine / Administrateur / Propriétaire */}
               {codeRequired && (
                 <div className="space-y-2 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
                   <Field
                     id="roleCode"
-                    label="Code d'invitation"
+                    label={`Code d'accès — ${roleLabel(role)}`}
                     icon={<KeyRound size={16} />}
                     type="password"
                     value={roleCode}
@@ -423,7 +428,7 @@ const AuthPage = () => {
                     autoComplete="off"
                   />
                   <p className="text-xs text-[#3e5788]">
-                    Ce rôle nécessite un code remis par le Propriétaire. Il est vérifié par le serveur et peut expirer.
+                    Ce rôle est protégé : le code est vérifié par le serveur et peut expirer.
                   </p>
                 </div>
               )}
