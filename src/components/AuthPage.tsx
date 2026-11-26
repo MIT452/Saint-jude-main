@@ -5,7 +5,7 @@ import { AppDispatch } from "../redux";
 import { setCurrentUser } from "../redux/feature/users";
 import {
   Anchor, ArrowRight, Bell, CalendarClock, Camera, Check, ChevronDown, Eye, EyeOff, FolderOpen,
-  Headset, Lock, LogIn, Mail, Phone, Ship, ShieldCheck, User, UserPlus,
+  Headset, Lock, LogIn, Mail, Phone, Ship, ShieldCheck, User, UserCog, UserPlus,
 } from "lucide-react";
 import { loginUser, registerUser } from "../data/service";
 import type { Role } from "../data/service";
@@ -25,14 +25,18 @@ const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
 const LOGIN_BG = LOGIN_PHOTO ? `url(${photoUrl(LOGIN_PHOTO)}), ${SEA}` : SEA;
 const SHIP_SRC = SHIP_PHOTO ? photoUrl(SHIP_PHOTO) : SHIP_FALLBACK;
 
-/* Rôle par défaut à l'inscription (la capture n'affiche pas de sélecteur).
-   Les rôles Admin / Propriétaire s'activent via le lien « J'ai un code d'accès ». */
+/* Rôles proposés à l'inscription.
+   Admin / Propriétaire exigent un code d'accès (vérifié aussi côté serveur). */
 const DEFAULT_ROLE = "gestionnaire" as Role;
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
   { value: "gestionnaire" as Role, label: "Gestionnaire" },
+  { value: "agent" as Role, label: "Agent" },
+  { value: "capitaine" as Role, label: "Capitaine" },
   { value: "admin" as Role, label: "Administrateur" },
   { value: "proprietaire" as Role, label: "Propriétaire" },
 ];
+const ROLES_WITH_CODE: string[] = ["admin", "proprietaire"];
+const needsCode = (r: Role) => ROLES_WITH_CODE.includes(String(r));
 
 const MAX_PHOTO = 2 * 1024 * 1024; // 2 Mo
 const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png"];
@@ -192,13 +196,14 @@ const AuthPage = () => {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [role, setRole] = useState<Role>(DEFAULT_ROLE);
   const [roleCode, setRoleCode] = useState("");
-  const [showCode, setShowCode] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [photo, setPhoto] = useState<string | undefined>(undefined);
   const [photoError, setPhotoError] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const codeRequired = needsCode(role);
 
   // Ouvre l'explorateur de fichiers du système
   const openExplorer = () => fileRef.current?.click();
@@ -223,6 +228,11 @@ const AuthPage = () => {
     }
   };
 
+  const handleRoleChange = (value: Role) => {
+    setRole(value);
+    if (!needsCode(value)) setRoleCode("");
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError("");
@@ -230,7 +240,7 @@ const AuthPage = () => {
       if (password !== confirmPassword) return setError("Les mots de passe ne correspondent pas.");
       if (!isStrong(password)) return setError("Le mot de passe ne respecte pas les règles de sécurité.");
       if (!isMgLocal(tel)) return setError("Numéro invalide (exemple : 34 12 345 67).");
-      if (showCode && !roleCode.trim()) return setError("Le code d'accès du rôle est obligatoire.");
+      if (codeRequired && !roleCode.trim()) return setError("Le code d'accès du rôle est obligatoire.");
     }
 
     setIsSubmitting(true);
@@ -242,8 +252,8 @@ const AuthPage = () => {
             email: login,
             tel: `+261${localDigits(tel)}`,
             password,
-            role: showCode ? role : DEFAULT_ROLE,
-            roleCode: showCode ? roleCode.trim() : "",
+            role,
+            roleCode: codeRequired ? roleCode.trim() : "",
           })
         : await loginUser({ email: login, password });
 
@@ -376,6 +386,45 @@ const AuthPage = () => {
                 </div>
               </div>
 
+              {/* Rôle (toujours visible) */}
+              <div>
+                <label htmlFor="role" className="flex items-center gap-1.5 text-sm font-semibold text-[#10285e]">
+                  <UserCog size={16} className="text-[#1255d6]" /> Rôle <span className="text-red-500">*</span>
+                </label>
+                <div className="mt-1.5 flex h-12 items-stretch overflow-hidden rounded-xl border border-[#cfdcf3] bg-white focus-within:border-[#1255d6] focus-within:ring-2 focus-within:ring-[#1255d6]/20">
+                  <select
+                    id="role"
+                    value={String(role)}
+                    onChange={(e) => handleRoleChange(e.target.value as Role)}
+                    required
+                    className="flex-1 bg-transparent px-3 text-sm text-[#10285e] outline-none"
+                  >
+                    {ROLE_OPTIONS.map((r) => (
+                      <option key={String(r.value)} value={String(r.value)}>
+                        {r.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Code d'accès : uniquement pour Administrateur / Propriétaire */}
+              {codeRequired && (
+                <div className="space-y-2 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
+                  <Field
+                    id="roleCode"
+                    label="Code d'accès du rôle"
+                    icon={<Lock size={16} />}
+                    type="password"
+                    value={roleCode}
+                    onChange={setRoleCode}
+                    placeholder="Code fourni par le propriétaire"
+                    autoComplete="off"
+                  />
+                  <p className="text-xs text-[#3e5788]">Ce rôle est protégé : le code est vérifié par le serveur.</p>
+                </div>
+              )}
+
               <PwdField id="password" label="Mot de passe" value={password} onChange={setPassword} placeholder="Minimum 8 caractères" autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
               <PwdField id="confirmPassword" label="Confirmer le mot de passe" value={confirmPassword} onChange={setConfirmPassword} placeholder="Confirmez votre mot de passe" autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
 
@@ -389,29 +438,6 @@ const AuthPage = () => {
                   ))}
                 </ul>
               )}
-
-              {/* Accès Admin / Propriétaire (masqué par défaut) */}
-              <div>
-                <button type="button" onClick={() => setShowCode((v) => !v)} className="text-xs font-semibold text-[#1255d6] hover:underline">
-                  {showCode ? "Annuler le code d'accès" : "J'ai un code d'accès (Admin / Propriétaire)"}
-                </button>
-                {showCode && (
-                  <div className="mt-2 space-y-3 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
-                    <select
-                      value={role}
-                      onChange={(e) => setRole(e.target.value as Role)}
-                      className="h-11 w-full rounded-xl border border-[#cfdcf3] bg-white px-3 text-sm text-[#10285e] outline-none"
-                    >
-                      {ROLE_OPTIONS.map((r) => (
-                        <option key={r.value} value={r.value}>
-                          {r.label}
-                        </option>
-                      ))}
-                    </select>
-                    <Field id="roleCode" label="Code d'accès du rôle" icon={<Lock size={16} />} type="password" value={roleCode} onChange={setRoleCode} placeholder="Code fourni par le propriétaire" autoComplete="off" />
-                  </div>
-                )}
-              </div>
 
               <div className="flex items-center gap-3 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
                 <ShieldCheck size={30} className="shrink-0 text-[#1255d6]" />
