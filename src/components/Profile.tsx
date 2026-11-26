@@ -1,65 +1,34 @@
-import { useRef, useState } from "react";
-import type { ChangeEvent, FormEvent, ReactNode } from "react";
-import { useDispatch } from "react-redux";
-import { AppDispatch } from "../redux";
-import { setCurrentUser } from "../redux/feature/users";
+// src/components/Profile.tsx
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { ChangeEvent, ReactNode } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import type { RootState, AppDispatch } from "../redux";
+import { updateOwnPassword } from "../redux/feature/users";
 import {
-  Anchor, ArrowRight, Bell, CalendarClock, Camera, Check, ChevronDown, Eye, EyeOff, FolderOpen,
-  Headset, KeyRound, Lock, LogIn, Mail, Phone, Ship, ShieldCheck, User, UserCog, UserPlus,
+  Search, Bell, ChevronDown, Calendar, User, UserCircle2, Camera, Mail, Phone, Shield, ShieldCheck, Lock, Eye, EyeOff,
+  Check, Lightbulb, Ship, Anchor, KeyRound, Copy, RefreshCw, Trash2,
 } from "lucide-react";
-import { loginUser, registerUser } from "../data/service";
-import type { Role } from "../data/service";
+import { toast } from "react-toastify";
+import { disableRoleCode, fetchRoleCodes, generateRoleCode } from "../data/roleCodes";
+import type { CodeRole, GeneratedCode, RoleCodeInfo } from "../data/roleCodes";
 
-/* ---------- Images ----------
-   Mettre vos photos dans public/images/ puis renseigner le nom du fichier.
-   Laisser "" pour utiliser le dégradé / l'image par défaut (aucun 404). */
-const LOGIN_PHOTO = ""; // ex. "login-bg.jpg"
-const SHIP_PHOTO = ""; // ex. "ship.jpg"
-const SHIP_FALLBACK =
-  "https://images.unsplash.com/photo-1544551763-46a013bb70d5?auto=format&fit=crop&w=1600&q=85";
+const pad = (n: number) => String(n).padStart(2, "0");
+const pick = (u: any, ...keys: string[]) => { for (const k of keys) if (u?.[k] !== undefined && u[k] !== null && u[k] !== "") return u[k]; return undefined; };
 
-const BASE = (import.meta.env.BASE_URL as string | undefined) ?? "/";
-const photoUrl = (file: string) => `${BASE}images/${file}`;
+const isStrong = (p: string) => p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /\d/.test(p) && /[^A-Za-z0-9]/.test(p);
 
-const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
-const LOGIN_BG = LOGIN_PHOTO ? `url(${photoUrl(LOGIN_PHOTO)}), ${SEA}` : SEA;
-const SHIP_SRC = SHIP_PHOTO ? photoUrl(SHIP_PHOTO) : SHIP_FALLBACK;
-
-/* Rôles proposés à l'inscription :
-   - Agent : code facultatif (exigé par le serveur seulement si le Propriétaire a activé un code Agent)
-   - Gestionnaire / Capitaine / Administrateur / Propriétaire : code d'accès obligatoire
-   Tout est revérifié côté serveur. */
-const DEFAULT_ROLE = "agent" as Role;
-const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
-  { value: "agent" as Role, label: "Agent" },
-  { value: "gestionnaire" as Role, label: "Gestionnaire" },
-  { value: "capitaine" as Role, label: "Capitaine" },
-  { value: "admin" as Role, label: "Administrateur" },
-  { value: "proprietaire" as Role, label: "Propriétaire" },
-];
-const ROLES_WITH_CODE: string[] = ["gestionnaire", "capitaine", "admin", "proprietaire"];
-const needsCode = (r: Role) => ROLES_WITH_CODE.includes(String(r));
-const roleLabel = (r: Role) => ROLE_OPTIONS.find((o) => String(o.value) === String(r))?.label ?? String(r);
-
-const MAX_PHOTO = 2 * 1024 * 1024; // 2 Mo
-const ALLOWED_TYPES = ["image/jpeg", "image/jpg", "image/png"];
-
-const RULES: Array<[string, (p: string) => boolean]> = [
-  ["Au moins 8 caractères", (p) => p.length >= 8],
-  ["Une lettre majuscule", (p) => /[A-Z]/.test(p)],
-  ["Une lettre minuscule", (p) => /[a-z]/.test(p)],
-  ["Un chiffre", (p) => /\d/.test(p)],
-  ["Un caractère spécial", (p) => /[^A-Za-z0-9]/.test(p)],
-];
-const isStrong = (p: string) => RULES.every(([, ok]) => ok(p));
-
-// Numéro malgache saisi après +261 : 34 12 345 67 ou 034 12 345 67 -> 9 chiffres
-const localDigits = (v: string) => v.replace(/\D/g, "").replace(/^0/, "");
-const isMgLocal = (v: string) => /^3\d{8}$/.test(localDigits(v));
-
-const script = { fontFamily: "'Brush Script MT','Segoe Script',cursive" } as const;
+/* ---------- Photo de profil : conservée dans le navigateur (une photo par utilisateur) ---------- */
 const photoKey = (id: unknown) => `profilePhoto:${String(id ?? "")}`;
 
+const readStoredPhoto = (id: unknown): string | undefined => {
+  try {
+    return localStorage.getItem(photoKey(id)) ?? undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+// Recadre en carré et réduit l'image (256 px, JPEG) pour qu'elle reste légère
 const resizeImage = (file: File, max = 256): Promise<string> =>
   new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -85,467 +54,437 @@ const resizeImage = (file: File, max = 256): Promise<string> =>
     reader.readAsDataURL(file);
   });
 
-/* ---------- Petits composants ---------- */
-const Wheel = ({ size = 84 }: { size?: number }) => (
-  <div
-    className="relative flex items-center justify-center rounded-full border-[5px] border-dashed border-[#0b3aa8] text-[#0b3aa8]"
-    style={{ width: size, height: size }}
-  >
-    <Anchor size={size * 0.5} strokeWidth={2.4} />
-  </div>
-);
-
-const Logo = () => (
-  <div className="flex flex-col items-center text-[#0b3aa8]">
-    <Wheel />
-    <span className="-mt-1 h-1.5 w-20 rounded-full bg-sky-400/70" />
-    <p className="mt-1 text-3xl font-extrabold tracking-wide">SAINT-JUDE</p>
-    <p className="text-sm italic text-[#1255d6]">Transport Maritime</p>
-  </div>
-);
-
-interface FieldProps {
-  id: string;
-  label: string;
-  icon: ReactNode;
-  required?: boolean;
-  type?: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  autoComplete?: string;
-  blockIcon?: boolean;
-}
-const Field = ({ id, label, icon, required = true, type = "text", value, onChange, placeholder, autoComplete, blockIcon }: FieldProps) => (
+// Champ lecture seule avec icône (informations personnelles)
+const ReadField = ({ label, value, icon, chevron, dot }: { label: string; value: string; icon?: ReactNode; chevron?: boolean; dot?: boolean }) => (
   <div>
-    <label htmlFor={id} className="flex items-center gap-1.5 text-sm font-semibold text-[#10285e]">
-      {!blockIcon && <span className="text-[#1255d6]">{icon}</span>}
-      {label}
-      {required && !blockIcon && <span className="text-red-500">*</span>}
-    </label>
-    <div className="mt-1.5 flex h-12 items-stretch overflow-hidden rounded-xl border border-[#cfdcf3] bg-white focus-within:border-[#1255d6] focus-within:ring-2 focus-within:ring-[#1255d6]/20">
-      {blockIcon && <span className="flex w-12 items-center justify-center bg-[#0b3aa8] text-white">{icon}</span>}
-      <input
-        id={id}
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        required={required}
-        className={`flex-1 bg-transparent px-3 text-sm text-[#10285e] outline-none placeholder:text-slate-400 ${blockIcon ? "bg-[#eef4fd]" : ""}`}
-      />
+    <label className="text-sm font-medium text-[#10285e]">{label}</label>
+    <div className="mt-1.5 flex items-center gap-3 border border-[#cfdcf3] rounded-lg bg-white px-3 h-11 text-sm text-[#10285e]">
+      {dot ? <span className="w-3 h-3 rounded-full bg-[#1fae6a]" /> : <span className="text-[#1255d6]">{icon}</span>}
+      <span className="flex-1 truncate">{value}</span>
+      {chevron && <ChevronDown size={16} className="text-gray-500" />}
     </div>
   </div>
 );
 
-interface PwdProps {
-  id: string;
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  placeholder?: string;
-  autoComplete: string;
-  show: boolean;
-  onToggle: () => void;
-  blockIcon?: boolean;
-}
-const PwdField = ({ id, label, value, onChange, placeholder, autoComplete, show, onToggle, blockIcon }: PwdProps) => (
-  <div>
-    <label htmlFor={id} className="flex items-center gap-1.5 text-sm font-semibold text-[#10285e]">
-      {!blockIcon && <Lock size={15} className="text-[#1255d6]" />}
-      {label}
-      {!blockIcon && <span className="text-red-500">*</span>}
-    </label>
-    <div className="mt-1.5 flex h-12 items-stretch overflow-hidden rounded-xl border border-[#cfdcf3] bg-white focus-within:border-[#1255d6] focus-within:ring-2 focus-within:ring-[#1255d6]/20">
-      {blockIcon && (
-        <span className="flex w-12 items-center justify-center bg-[#0b3aa8] text-white">
-          <Lock size={18} />
-        </span>
-      )}
-      <input
-        id={id}
-        type={show ? "text" : "password"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        autoComplete={autoComplete}
-        required
-        className={`flex-1 px-3 text-sm text-[#10285e] outline-none placeholder:text-slate-400 ${blockIcon ? "bg-[#eef4fd]" : "bg-transparent"}`}
-      />
-      <button type="button" onClick={onToggle} tabIndex={-1} className="px-3 text-[#1255d6]" aria-label="Afficher ou masquer le mot de passe">
-        {show ? <EyeOff size={18} /> : <Eye size={18} />}
-      </button>
-    </div>
-  </div>
-);
-
-const features: Array<[ReactNode, string, string]> = [
-  [<ShieldCheck size={22} />, "Réservez en toute confiance", "Sécurité et fiabilité garanties"],
-  [<CalendarClock size={22} />, "Suivez vos réservations", "en temps réel"],
-  [<Bell size={22} />, "Recevez des notifications", "par e-mail ou WhatsApp"],
-  [<Headset size={22} />, "Assistance IA", "à votre écoute 24h/24"],
-];
-
-/* ============================ PAGE ============================ */
-const AuthPage = () => {
-  const dispatch = useDispatch<AppDispatch>();
-  const [isRegistering, setIsRegistering] = useState(false);
-  const [name, setName] = useState("");
-  const [lastName, setLastName] = useState("");
-  const [tel, setTel] = useState("");
-  const [login, setLogin] = useState("");
-  const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
-  const [role, setRole] = useState<Role>(DEFAULT_ROLE);
-  const [roleCode, setRoleCode] = useState("");
-  const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState("");
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [photo, setPhoto] = useState<string | undefined>(undefined);
-  const [photoError, setPhotoError] = useState("");
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const codeRequired = needsCode(role); // obligatoire côté formulaire (4 rôles)
-  const isAgent = String(role) === "agent"; // facultatif : décidé par le serveur
-
-  // Ouvre l'explorateur de fichiers du système
-  const openExplorer = () => fileRef.current?.click();
-
-  const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
-    const f = e.target.files?.[0];
-    e.target.value = "";
-    if (!f) return;
-    setPhotoError("");
-    if (!ALLOWED_TYPES.includes(f.type)) {
-      setPhotoError("Format invalide : JPG, JPEG ou PNG uniquement.");
-      return;
-    }
-    if (f.size > MAX_PHOTO) {
-      setPhotoError("Image trop lourde (2 Mo maximum).");
-      return;
-    }
-    try {
-      setPhoto(await resizeImage(f));
-    } catch {
-      setPhotoError("Impossible de lire cette image.");
-    }
-  };
-
-  // Changer de rôle efface le code saisi (il était destiné à un autre rôle)
-  const handleRoleChange = (value: Role) => {
-    setRole(value);
-    setRoleCode("");
-    setError("");
-  };
-
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
-    setError("");
-    if (isRegistering) {
-      if (password !== confirmPassword) return setError("Les mots de passe ne correspondent pas.");
-      if (!isStrong(password)) return setError("Le mot de passe ne respecte pas les règles de sécurité.");
-      if (!isMgLocal(tel)) return setError("Numéro invalide (exemple : 34 12 345 67).");
-      if (codeRequired && !roleCode.trim()) return setError(`Le code d'accès du rôle ${roleLabel(role)} est obligatoire.`);
-    }
-
-    setIsSubmitting(true);
-    try {
-      const user = isRegistering
-        ? await registerUser({
-            name,
-            lastName,
-            email: login,
-            tel: `+261${localDigits(tel)}`,
-            password,
-            role,
-            roleCode: roleCode.trim(),
-          })
-        : await loginUser({ email: login, password });
-
-      if (isRegistering && photo) {
-        try {
-          const newId = (user as { id?: unknown } | null)?.id;
-          if (newId !== undefined && newId !== null) localStorage.setItem(photoKey(newId), photo);
-        } catch {
-          /* stockage plein ou indisponible */
-        }
-      }
-      dispatch(setCurrentUser(user));
-    } catch (requestError) {
-      const responseError = requestError as { response?: { data?: { error?: string } } };
-      setError(responseError.response?.data?.error || "Connexion au serveur impossible. Vérifiez le backend et CORS.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const switchMode = () => {
-    setIsRegistering((v) => !v);
-    setError("");
-  };
-
-  /* ============================ INSCRIPTION ============================ */
-  if (isRegistering) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-[#7ec0f5] via-[#3b8fe0] to-[#0d4aa8] p-3 md:p-6">
-        <div className="mx-auto grid max-w-6xl grid-cols-1 gap-5 lg:grid-cols-[1fr_1.05fr]">
-          {/* ---------- Colonne gauche ---------- */}
-          <div className="relative hidden flex-col overflow-hidden rounded-3xl bg-gradient-to-b from-[#e6f3ff] via-[#9fd0f7] to-[#1f74d6] p-6 lg:flex">
-            <Logo />
-            <p className="mt-4 text-center text-3xl text-[#0b3aa8]" style={script}>
-              Plus qu'un transport,
-              <br />
-              une connexion
-            </p>
-            <img src={SHIP_SRC} alt="Cargo en mer" className="my-4 h-56 w-full rounded-2xl object-cover shadow-lg" />
-            <div className="space-y-2.5">
-              {features.map(([icon, t1, t2]) => (
-                <div key={t1} className="flex items-center gap-3 rounded-xl bg-[#0d3f94]/90 px-4 py-2.5 text-white">
-                  <span className="flex h-10 w-10 items-center justify-center rounded-full border border-white/40 bg-white/10">{icon}</span>
-                  <p className="text-sm leading-tight">
-                    <b>{t1}</b>
-                    <br />
-                    <span className="text-white/85">{t2}</span>
-                  </p>
-                </div>
-              ))}
-            </div>
-            <p className="mt-auto pt-4 text-center text-2xl text-white" style={script}>
-              Ensemble vers
-              <br />
-              de nouveaux horizons
-              <Anchor size={22} className="ml-2 inline-block" />
-            </p>
-          </div>
-
-          {/* ---------- Carte formulaire ---------- */}
-          <form onSubmit={handleSubmit} className="overflow-hidden rounded-3xl border border-white/70 bg-gradient-to-b from-white to-[#eef5ff] shadow-2xl">
-            <div className="bg-gradient-to-r from-[#0d4aa8] to-[#1f74d6] py-4 text-center text-white">
-              <Anchor size={22} className="mx-auto" />
-              <h1 className="text-2xl font-extrabold">Créer un compte</h1>
-              <p className="text-sm tracking-wide">SAINT-JUDE</p>
-            </div>
-
-            <div className="space-y-4 p-5 md:p-7">
-              {/* Photo + explorateur de fichiers */}
-              <div className="flex items-center gap-4">
-                <div className="relative shrink-0">
-                  {photo ? (
-                    <img src={photo} alt="Votre photo" className="h-28 w-28 rounded-full border-4 border-[#1255d6] object-cover" />
-                  ) : (
-                    <span className="flex h-28 w-28 items-center justify-center rounded-full border-4 border-[#1255d6] bg-[#dcebfb] text-[#1255d6]">
-                      <User size={48} />
-                    </span>
-                  )}
-                  <button
-                    type="button"
-                    onClick={openExplorer}
-                    title="Choisir une photo"
-                    className="absolute bottom-0 right-0 flex h-8 w-8 items-center justify-center rounded-full border-2 border-white bg-[#1255d6] text-white"
-                  >
-                    <Camera size={15} />
-                  </button>
-                </div>
-                <div className="flex-1">
-                  <p className="font-bold text-[#10285e]">Ajouter une photo</p>
-                  <p className="text-xs text-[#3e5788]">Choisissez une photo de profil (png, jpg, jpeg).</p>
-                  <button
-                    type="button"
-                    onClick={openExplorer}
-                    className="mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-[#1255d6] text-sm font-semibold text-white hover:bg-[#0e45b3]"
-                  >
-                    <FolderOpen size={17} /> Explorer le fichier
-                  </button>
-                  <p className="mt-1 text-[11px] text-[#3e5788]">Taille max : 2 Mo • Format : JPG, PNG</p>
-                  {photoError && <p className="text-xs text-red-600">{photoError}</p>}
-                </div>
-                <input ref={fileRef} type="file" accept=".png,.jpg,.jpeg,image/png,image/jpeg" onChange={onPhoto} className="hidden" />
-              </div>
-
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <Field id="name" label="Prénom" icon={<User size={16} />} value={name} onChange={setName} placeholder="Entrez votre prénom" autoComplete="given-name" />
-                <Field id="lastName" label="Nom" icon={<User size={16} />} value={lastName} onChange={setLastName} placeholder="Entrez votre nom" autoComplete="family-name" />
-              </div>
-
-              <Field id="email" label="Adresse email" icon={<Mail size={16} />} type="email" value={login} onChange={setLogin} placeholder="exemple@gmail.com" autoComplete="email" />
-
-              {/* Téléphone avec préfixe +261 */}
-              <div>
-                <label htmlFor="tel" className="flex items-center gap-1.5 text-sm font-semibold text-[#10285e]">
-                  <Phone size={16} className="text-[#1255d6]" /> Téléphone <span className="text-red-500">*</span>
-                </label>
-                <div className="mt-1.5 flex h-12 items-stretch overflow-hidden rounded-xl border border-[#cfdcf3] bg-white focus-within:border-[#1255d6] focus-within:ring-2 focus-within:ring-[#1255d6]/20">
-                  <span className="flex items-center gap-1 border-r border-[#cfdcf3] bg-[#eef4fd] px-3 text-sm font-semibold text-[#10285e]">
-                    +261 <ChevronDown size={14} />
-                  </span>
-                  <input
-                    id="tel"
-                    type="tel"
-                    value={tel}
-                    onChange={(e) => setTel(e.target.value)}
-                    placeholder="Votre numéro WhatsApp"
-                    autoComplete="tel-national"
-                    required
-                    className="flex-1 bg-transparent px-3 text-sm text-[#10285e] outline-none placeholder:text-slate-400"
-                  />
-                </div>
-              </div>
-
-              {/* Rôle (toujours visible) */}
-              <div>
-                <label htmlFor="role" className="flex items-center gap-1.5 text-sm font-semibold text-[#10285e]">
-                  <UserCog size={16} className="text-[#1255d6]" /> Rôle <span className="text-red-500">*</span>
-                </label>
-                <div className="mt-1.5 flex h-12 items-stretch overflow-hidden rounded-xl border border-[#cfdcf3] bg-white focus-within:border-[#1255d6] focus-within:ring-2 focus-within:ring-[#1255d6]/20">
-                  <select
-                    id="role"
-                    value={String(role)}
-                    onChange={(e) => handleRoleChange(e.target.value as Role)}
-                    required
-                    className="flex-1 bg-transparent px-3 text-sm text-[#10285e] outline-none"
-                  >
-                    {ROLE_OPTIONS.map((r) => (
-                      <option key={String(r.value)} value={String(r.value)}>
-                        {r.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              {/* Code d'accès : obligatoire (4 rôles) ou facultatif (Agent) */}
-              {(codeRequired || isAgent) && (
-                <div className="space-y-2 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
-                  <Field
-                    id="roleCode"
-                    label={isAgent ? "Code d'accès — Agent (facultatif)" : `Code d'accès — ${roleLabel(role)}`}
-                    icon={<KeyRound size={16} />}
-                    required={codeRequired}
-                    type="password"
-                    value={roleCode}
-                    onChange={setRoleCode}
-                    placeholder={isAgent ? "Laissez vide si aucun code n'est demandé" : "Code fourni par le Propriétaire"}
-                    autoComplete="off"
-                  />
-                  <p className="text-xs text-[#3e5788]">
-                    {isAgent
-                      ? "Si le Propriétaire a activé un code Agent, le serveur vous le demandera."
-                      : "Ce rôle est protégé : le code est vérifié par le serveur et peut expirer."}
-                  </p>
-                </div>
-              )}
-
-              <PwdField id="password" label="Mot de passe" value={password} onChange={setPassword} placeholder="Minimum 8 caractères" autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
-              <PwdField id="confirmPassword" label="Confirmer le mot de passe" value={confirmPassword} onChange={setConfirmPassword} placeholder="Confirmez votre mot de passe" autoComplete="new-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
-
-              {/* Règles du mot de passe : visibles dès que l'on tape */}
-              {password && (
-                <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2">
-                  {RULES.map(([label, ok]) => (
-                    <li key={label} className={`flex items-center gap-1.5 text-xs ${ok(password) ? "font-medium text-[#14894f]" : "text-[#3e5788]"}`}>
-                      <Check size={13} /> {label}
-                    </li>
-                  ))}
-                </ul>
-              )}
-
-              <div className="flex items-center gap-3 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
-                <ShieldCheck size={30} className="shrink-0 text-[#1255d6]" />
-                <div>
-                  <p className="text-sm font-semibold text-[#10285e]">Votre compte est sécurisé</p>
-                  <p className="text-xs text-[#3e5788]">Vos données sont protégées selon les normes de sécurité.</p>
-                </div>
-              </div>
-
-              {error && <p className="text-sm text-red-600">{error}</p>}
-
-              <button
-                type="submit"
-                disabled={isSubmitting}
-                className="flex h-12 w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-[#0d4aa8] to-[#1255d6] font-semibold text-white shadow-lg hover:brightness-110 disabled:opacity-60"
-              >
-                <UserPlus size={18} /> {isSubmitting ? "Veuillez patienter…" : "Créer mon compte"} {!isSubmitting && <ArrowRight size={18} />}
-              </button>
-
-              <p className="text-center text-sm text-[#3e5788]">
-                Déjà inscrit ?{" "}
-                <button type="button" onClick={switchMode} className="font-bold text-[#1255d6] hover:underline">
-                  Se connecter
-                </button>
-              </p>
-
-              <p className="flex items-center justify-center gap-2 border-t border-[#dbe5f5] pt-3 text-xs italic text-[#1255d6]">
-                <Ship size={16} /> SAINT-JUDE – Transport Maritime Antalaha ↔ Toamasina
-              </p>
-            </div>
-          </form>
-        </div>
-      </div>
-    );
-  }
-
-  /* ============================ CONNEXION ============================ */
+// Champ mot de passe avec cadenas + œil
+const PwdField = ({ label, placeholder, value, onChange, error }: { label: string; placeholder: string; value: string; onChange: (v: string) => void; error?: string }) => {
+  const [show, setShow] = useState(false);
   return (
-    <div
-      className="relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-10"
-      style={{ backgroundImage: LOGIN_BG, backgroundSize: "cover", backgroundPosition: "center" }}
-    >
-      <img
-        src={SHIP_SRC}
-        alt=""
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-y-0 right-0 hidden h-full w-1/3 object-cover opacity-70 lg:block"
-        style={{ maskImage: "linear-gradient(to left, black 50%, transparent)", WebkitMaskImage: "linear-gradient(to left, black 50%, transparent)" }}
-      />
-
-      <form onSubmit={handleSubmit} className="relative w-full max-w-[560px] space-y-5 overflow-hidden rounded-[28px] bg-white/95 p-7 shadow-2xl md:p-10">
-        <div className="pointer-events-none absolute -left-10 -top-10 h-40 w-40 rounded-full bg-gradient-to-br from-[#0d4aa8] to-transparent opacity-80" />
-        <Anchor size={90} className="pointer-events-none absolute left-4 top-24 -rotate-12 text-[#dcebfb]" />
-
-        <div className="relative flex flex-col items-center text-center">
-          <Wheel size={76} />
-          <span className="-mt-1 h-1.5 w-16 rounded-full bg-sky-400/70" />
-          <p className="mt-1 text-4xl font-extrabold tracking-wide text-[#10285e]">SAINT JUDE</p>
-          <p className="text-sm italic text-[#3e5788]">— Transport Maritime Antalaha → Toamasina —</p>
-          <h1 className="mt-4 text-3xl font-extrabold text-[#10285e]">
-            Bienvenue sur{" "}
-            <span className="relative text-[#1255d6]">
-              Saint Jude
-              <span className="absolute -bottom-1 left-0 h-1 w-full rounded-full bg-amber-400" />
-            </span>
-          </h1>
-          <p className="mt-2 italic text-[#3e5788]">Gestion du transport maritime de marchandises</p>
-        </div>
-
-        <div className="relative space-y-4">
-          <Field id="login" label="Adresse email" icon={<Mail size={18} />} blockIcon type="email" value={login} onChange={setLogin} placeholder="exemple@gmail.com" autoComplete="username" />
-          <PwdField id="password" label="Mot de passe" blockIcon value={password} onChange={setPassword} placeholder="Entrez votre mot de passe" autoComplete="current-password" show={showPassword} onToggle={() => setShowPassword((s) => !s)} />
-        </div>
-
-        {error && <p className="relative text-sm text-red-600">{error}</p>}
-
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="relative flex h-14 w-full items-center justify-center gap-3 rounded-2xl bg-gradient-to-b from-[#1255d6] to-[#0b3aa8] text-lg font-semibold text-white shadow-lg hover:brightness-110 disabled:opacity-60"
-        >
-          <LogIn size={20} /> {isSubmitting ? "Veuillez patienter…" : "Se connecter"}
-        </button>
-
-        <p className="relative flex items-center justify-center gap-2 text-sm italic text-[#3e5788]">
-          Pas encore de compte ?
-          <button type="button" onClick={switchMode} className="flex items-center gap-1 font-bold not-italic text-[#1255d6] hover:underline">
-            <UserPlus size={16} /> Créer un compte
-          </button>
-        </p>
-
-        <p className="relative flex items-center justify-center gap-2 border-t border-[#dbe5f5] pt-3 text-xs italic text-[#3e5788]">
-          <Ship size={16} className="text-[#1255d6]" /> Saint Jude – Transport Maritime Antalaha ↔ Toamasina
-        </p>
-      </form>
+    <div>
+      <label className="text-sm font-medium text-[#10285e]">{label}</label>
+      <div className={`mt-1.5 flex items-center gap-3 border rounded-lg bg-white px-3 h-11 ${error ? "border-red-400" : "border-[#cfdcf3]"}`}>
+        <Lock size={16} className="text-[#1255d6]" />
+        <input type={show ? "text" : "password"} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder}
+          className="flex-1 outline-none text-sm bg-transparent placeholder:text-gray-400" />
+        <button type="button" onClick={() => setShow((s) => !s)} className="text-[#1255d6]" tabIndex={-1}>{show ? <EyeOff size={17} /> : <Eye size={17} />}</button>
+      </div>
+      {error && <p className="text-xs text-red-500 mt-1">{error}</p>}
     </div>
   );
 };
 
-export default AuthPage;
+/* ---------- Codes d'accès des rôles (Propriétaire uniquement) ---------- */
+const CODE_ROLES: Array<{ role: CodeRole; label: string; hint: string }> = [
+  { role: "agent", label: "Agent", hint: "Sans code actif, l'inscription Agent est libre." },
+  { role: "gestionnaire", label: "Gestionnaire", hint: "Code obligatoire à l'inscription." },
+  { role: "capitaine", label: "Capitaine", hint: "Code obligatoire à l'inscription." },
+  { role: "admin", label: "Administrateur", hint: "Code obligatoire à l'inscription." },
+  { role: "proprietaire", label: "Propriétaire", hint: "Code obligatoire à l'inscription." },
+];
+const roleLabel = (role: CodeRole) => CODE_ROLES.find((r) => r.role === role)?.label ?? role;
+
+const formatDate = (iso: string | null | undefined) => {
+  if (!iso) return "Sans expiration";
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "—";
+  return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
+};
+
+const RoleCodesCard = () => {
+  const [codes, setCodes] = useState<RoleCodeInfo[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyRole, setBusyRole] = useState<CodeRole | null>(null);
+  const [days, setDays] = useState<Record<CodeRole, number>>({ agent: 30, gestionnaire: 30, capitaine: 30, admin: 30, proprietaire: 30 });
+  const [generated, setGenerated] = useState<GeneratedCode | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      setCodes(await fetchRoleCodes());
+    } catch {
+      toast("Impossible de charger les codes d'accès.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  const infoFor = (role: CodeRole) => codes.find((c) => c.role === role);
+
+  const handleGenerate = async (role: CodeRole) => {
+    try {
+      setBusyRole(role);
+      const result = await generateRoleCode(role, days[role]);
+      setGenerated(result);
+      await load();
+      toast("Nouveau code généré. Copiez-le maintenant.");
+    } catch {
+      toast("Échec de la génération du code.");
+    } finally {
+      setBusyRole(null);
+    }
+  };
+
+  const handleDisable = async (role: CodeRole) => {
+    try {
+      setBusyRole(role);
+      await disableRoleCode(role);
+      if (generated?.role === role) setGenerated(null);
+      await load();
+      toast("Code désactivé.");
+    } catch {
+      toast("Échec de la désactivation.");
+    } finally {
+      setBusyRole(null);
+    }
+  };
+
+  const copyCode = async () => {
+    if (!generated) return;
+    try {
+      await navigator.clipboard.writeText(generated.code);
+      toast("Code copié.");
+    } catch {
+      toast("Copie impossible : sélectionnez le code manuellement.");
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5">
+      <h3 className="text-lg font-bold text-[#0b3aa8] flex items-center gap-3 mb-4">
+        <KeyRound size={22} className="text-[#1255d6]" /> Codes d'accès des rôles
+      </h3>
+      <div className="flex items-center gap-3 bg-[#eaf3ff] border border-[#c7defa] rounded-lg px-4 py-3 text-xs text-[#1d4fb8] mb-4">
+        <ShieldCheck size={26} className="shrink-0" />
+        <p>
+          Ces codes permettent à un nouvel utilisateur de s'inscrire avec le rôle correspondant. Pour l'Agent, tant qu'aucun code n'est actif,
+          l'inscription reste libre ; dès qu'un code Agent est actif, il devient obligatoire. Le code n'est affiché qu'une seule fois : seule son
+          empreinte est conservée dans la base. Ne partagez le code Propriétaire ou Administrateur qu'avec des personnes de confiance.
+        </p>
+      </div>
+
+      {generated && (
+        <div className="mb-4 rounded-lg border border-[#1fae6a] bg-[#e9f9f0] p-4">
+          <p className="text-sm font-semibold text-[#14894f]">
+            Code {roleLabel(generated.role)} — expire le {formatDate(generated.expiresAt)}
+          </p>
+          <div className="mt-2 flex items-center gap-2">
+            <code className="flex-1 rounded-md bg-white border border-[#b9e5cd] px-3 py-2 text-base font-bold tracking-wider text-[#10285e] break-all">{generated.code}</code>
+            <button onClick={copyCode} className="h-10 px-3 rounded-md bg-[#14894f] text-white text-sm font-semibold flex items-center gap-2 hover:brightness-110">
+              <Copy size={15} /> Copier
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-[#14894f]">Notez-le maintenant : il ne sera plus affiché après fermeture de cette carte ou de la page.</p>
+          <button onClick={() => setGenerated(null)} className="mt-1 text-xs text-[#1255d6] hover:underline">Masquer le code</button>
+        </div>
+      )}
+
+      <div className="space-y-3">
+        {CODE_ROLES.map(({ role, label, hint }) => {
+          const info = infoFor(role);
+          const expired = !!info?.expiresAt && new Date(info.expiresAt).getTime() < Date.now();
+          const active = !!info?.isActive && !expired;
+          const busy = busyRole === role;
+          const hasCode = !!info?.isActive; // actif ou expiré (toujours à renouveler / désactiver)
+          const statusText = loading
+            ? "Chargement…"
+            : active
+              ? "Actif"
+              : expired
+                ? "Expiré"
+                : role === "agent"
+                  ? "Libre (sans code)"
+                  : "Aucun code actif";
+          const statusGood = active || (!hasCode && role === "agent" && !loading);
+          return (
+            <div key={role} className="rounded-lg border border-[#cfdcf3] p-3">
+              <div className="flex flex-wrap items-center gap-3">
+                <span className="font-semibold text-[#10285e] w-32">{label}</span>
+                <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${statusGood ? "bg-[#d9f5e6] text-[#14894f]" : "bg-[#fde8e8] text-[#b42318]"}`}>
+                  {statusText}
+                </span>
+                {hasCode && <span className="text-xs text-[#3e5788]">Expire le {formatDate(info?.expiresAt)}</span>}
+              </div>
+              <p className="mt-1 text-xs text-[#3e5788]">{hint}</p>
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <select
+                  value={days[role]}
+                  onChange={(e) => setDays((d) => ({ ...d, [role]: Number(e.target.value) }))}
+                  className="h-10 rounded-lg border border-[#cfdcf3] bg-white px-3 text-sm text-[#10285e] outline-none"
+                >
+                  <option value={7}>Valable 7 jours</option>
+                  <option value={30}>Valable 30 jours</option>
+                  <option value={90}>Valable 90 jours</option>
+                </select>
+                <button
+                  onClick={() => handleGenerate(role)}
+                  disabled={busy}
+                  className="h-10 px-4 rounded-lg bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold flex items-center gap-2 disabled:opacity-60"
+                >
+                  <RefreshCw size={15} /> {hasCode ? "Renouveler le code" : "Générer un code"}
+                </button>
+                {hasCode && (
+                  <button
+                    onClick={() => handleDisable(role)}
+                    disabled={busy}
+                    className="h-10 px-4 rounded-lg border border-red-300 text-red-600 text-sm font-semibold flex items-center gap-2 hover:bg-red-50 disabled:opacity-60"
+                  >
+                    <Trash2 size={15} /> {role === "agent" ? "Désactiver (inscription libre)" : "Désactiver"}
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+};
+
+const Profile = () => {
+  const dispatch = useDispatch<AppDispatch>();
+  const currentUser = useSelector((state: RootState) => state.users.currentUser);
+  const { error, success } = useSelector((state: RootState) => state.users);
+
+  const [oldPassword, setOldPassword] = useState("");
+  const [newPassword, setNewPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [photo, setPhoto] = useState<string | undefined>(
+    readStoredPhoto(currentUser?.id) ?? pick(currentUser, "photo", "image", "avatar", "picture"),
+  );
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  // Après un rafraîchissement, l'utilisateur peut arriver un peu après le premier affichage :
+  // on recharge alors sa photo enregistrée.
+  useEffect(() => {
+    if (!currentUser) return;
+    const saved = readStoredPhoto(currentUser.id) ?? pick(currentUser, "photo", "image", "avatar", "picture");
+    if (saved) setPhoto(saved);
+  }, [currentUser?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleChangePassword = async () => {
+    if (!currentUser) return;
+    if (!oldPassword.trim() || !newPassword.trim() || !confirmPassword.trim()) {
+      toast("Veuillez remplir tous les champs.");
+      return;
+    }
+    if (newPassword.trim() !== confirmPassword.trim()) {
+      toast("Le nouveau mot de passe et la confirmation ne correspondent pas.");
+      return;
+    }
+    if (!isStrong(newPassword.trim())) {
+      toast("Le mot de passe ne respecte pas les règles de sécurité.");
+      return;
+    }
+    try {
+      setBusy(true);
+      await dispatch(
+        updateOwnPassword({ userId: currentUser.id, oldPassword: oldPassword.trim(), newPassword: newPassword.trim() })
+      ).unwrap();
+      setOldPassword("");
+      setNewPassword("");
+      setConfirmPassword("");
+      toast("Mot de passe modifié avec succès.");
+    } catch {
+      toast("Échec de la modification du mot de passe.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!currentUser) return <p>Veuillez vous connecter.</p>;
+
+  const u: any = currentUser;
+  const phone = pick(u, "phone", "telephone", "tel", "phoneNumber", "contact") ?? "—";
+  const statusRaw = String(pick(u, "status", "statut", "state") ?? "");
+  const statusLabel = /cong/i.test(statusRaw) ? "Congé" : /abs|inactif|inactive/i.test(statusRaw) ? "Absent" : /actif|active/i.test(statusRaw) ? "Actif" : statusRaw || "—";
+  const lastRaw = pick(u, "lastLogin", "lastLoginAt", "derniereConnexion", "lastConnection");
+  const last = lastRaw ? new Date(lastRaw) : null;
+  const lastLabel = last && !isNaN(last.getTime()) ? `${pad(last.getDate())}/${pad(last.getMonth() + 1)}/${last.getFullYear()} à ${pad(last.getHours())}:${pad(last.getMinutes())}` : "—";
+  const fullName = `${currentUser.name ?? ""} ${currentUser.lastName ?? ""}`.trim();
+  const now = new Date();
+  const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+  const canSubmit = !!oldPassword.trim() && isStrong(newPassword) && newPassword === confirmPassword && !busy;
+  const isOwner = /propri/i.test(String(currentUser.role ?? ""));
+
+  const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = ""; // permet de rechoisir le même fichier
+    if (!f) return;
+    if (!f.type.startsWith("image/")) {
+      toast("Veuillez choisir une image.");
+      return;
+    }
+    if (f.size > 8 * 1024 * 1024) {
+      toast("Image trop lourde (8 Mo maximum).");
+      return;
+    }
+    try {
+      const data = await resizeImage(f);
+      localStorage.setItem(photoKey(currentUser.id), data);
+      setPhoto(data);
+      toast("Photo enregistrée sur cet appareil.");
+    } catch {
+      toast("Impossible d'enregistrer cette photo.");
+    }
+  };
+
+  const Avatar = ({ size }: { size: string }) =>
+    photo ? <img src={photo} alt="" className={`${size} rounded-full object-cover`} />
+      : <span className={`${size} rounded-full bg-[#2aa3f0] text-white flex items-center justify-center`}><User size={40} /></span>;
+
+  return (
+    <div className="bg-[#f3f7fd] min-h-full text-[#10285e]">
+      {/* Barre du haut */}
+      <div className="bg-white border-b border-[#e3eaf6] px-5 py-3 flex flex-wrap items-center gap-4">
+        <div className="relative flex-1 min-w-[260px] max-w-[500px]">
+          <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#1255d6]" />
+          <input placeholder="Rechercher une fonction, un bateau, un trajet..." className="w-full bg-[#eef3fb] rounded-full pl-11 pr-3 py-3 text-xs" />
+        </div>
+        <div className="ml-auto flex items-center gap-5">
+          <Bell size={22} className="text-[#1255d6]" />
+          <div className="flex items-center gap-2 bg-[#eef3fb] rounded-full pl-1.5 pr-3 py-1">
+            {photo
+              ? <img src={photo} alt="" className="w-9 h-9 rounded-full object-cover" />
+              : <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={20} /></div>}
+            <span className="text-sm">{currentUser.role === "Propriétaire" ? "Administrateur" : currentUser.name}</span>
+            <ChevronDown size={14} />
+          </div>
+          <div className="flex items-center gap-2 text-xs">
+            <Calendar size={26} className="text-[#1255d6]" />
+            <div><p className="capitalize">{dateLabel}</p><p>{pad(now.getHours())}:{pad(now.getMinutes())}</p></div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bandeau titre avec vagues */}
+      <div className="relative overflow-hidden bg-gradient-to-r from-[#f4f9ff] via-[#eaf4ff] to-[#d6e9fb] border-b border-[#e3eaf6]">
+        <svg className="absolute right-0 bottom-0 h-full w-[55%] opacity-70" viewBox="0 0 600 100" preserveAspectRatio="none">
+          <path d="M0,70 C80,40 160,95 260,65 C360,35 440,85 600,50 L600,100 L0,100 Z" fill="#b9d8f5" />
+          <path d="M0,85 C100,60 200,100 300,80 C400,60 500,95 600,75 L600,100 L0,100 Z" fill="#8fc0ee" />
+        </svg>
+        <div className="relative px-7 py-5 flex items-center gap-5">
+          <div className="w-[72px] h-[72px] rounded-full bg-[#1d8bf0] text-white flex items-center justify-center shadow-md shrink-0"><User size={40} /></div>
+          <div className="mr-auto">
+            <h1 className="text-3xl font-extrabold text-[#0b3aa8]">Mon profil</h1>
+            <p className="text-base text-[#3e5788]">Modifiez votre mot de passe pour protéger l'accès à votre compte</p>
+          </div>
+          <Ship size={54} className="hidden md:block text-[#2f6fb8]" />
+          <p className="hidden md:flex items-center gap-2 italic text-[#1255d6] text-lg" style={{ fontFamily: "cursive" }}>Votre sécurité, notre priorité <Anchor size={20} /></p>
+        </div>
+      </div>
+
+      <div className="p-5 grid grid-cols-1 xl:grid-cols-[1fr_380px] gap-4">
+        {/* Colonne gauche */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5">
+            <h3 className="text-lg font-bold text-[#0b3aa8] flex items-center gap-3 mb-4"><User size={22} className="text-[#1255d6]" /> Informations personnelles</h3>
+            <div className="grid grid-cols-1 md:grid-cols-[170px_1fr] gap-5">
+              <div className="flex flex-col items-center gap-2 pt-3">
+                <div className="relative">
+                  <Avatar size="w-[120px] h-[120px]" />
+                  <button onClick={() => fileRef.current?.click()} title="Changer la photo" className="absolute bottom-1 right-1 w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center border-2 border-white"><Camera size={16} /></button>
+                  <input ref={fileRef} type="file" accept="image/*" onChange={onPhoto} className="hidden" />
+                </div>
+                <button onClick={() => fileRef.current?.click()} className="text-xs text-[#1255d6]">Changer la photo</button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
+                <ReadField label="Nom *" value={currentUser.name ?? "—"} icon={<User size={16} />} />
+                <ReadField label="Prénom *" value={currentUser.lastName ?? "—"} icon={<User size={16} />} />
+                <ReadField label="Email *" value={currentUser.email ?? "—"} icon={<Mail size={16} />} />
+                <ReadField label="Téléphone *" value={phone} icon={<Phone size={16} />} />
+                <ReadField label="Rôle" value={currentUser.role ?? "—"} icon={<Shield size={16} />} chevron />
+                <ReadField label="Statut" value={statusLabel} dot chevron />
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5">
+            <h3 className="text-lg font-bold text-[#0b3aa8] flex items-center gap-3 mb-4"><Lock size={22} className="text-[#1255d6]" /> Changer mon mot de passe</h3>
+            <div className="flex items-center gap-3 bg-[#eaf3ff] border border-[#c7defa] rounded-lg px-4 py-3 text-xs text-[#1d4fb8] mb-4">
+              <ShieldCheck size={26} className="shrink-0" />
+              <p>Votre mot de passe doit contenir au moins 8 caractères, une lettre majuscule, une lettre minuscule, un chiffre et un caractère spécial.</p>
+            </div>
+            <div className="space-y-4">
+              <PwdField label="Ancien mot de passe" placeholder="Votre ancien mot de passe" value={oldPassword} onChange={setOldPassword} />
+              <PwdField label="Nouveau mot de passe" placeholder="Votre nouveau mot de passe" value={newPassword} onChange={setNewPassword}
+                error={newPassword && !isStrong(newPassword) ? "Le mot de passe ne respecte pas les règles ci-dessus" : undefined} />
+              <PwdField label="Confirmer le nouveau mot de passe" placeholder="Confirmez votre nouveau mot de passe" value={confirmPassword} onChange={setConfirmPassword}
+                error={confirmPassword && confirmPassword !== newPassword ? "Les mots de passe ne correspondent pas" : undefined} />
+              <button onClick={handleChangePassword} disabled={!canSubmit}
+                className="w-full h-11 rounded-lg bg-[#1255d6] hover:bg-[#0e45b3] text-white text-sm font-semibold flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed">
+                <Lock size={16} /> {busy ? "Modification..." : "Modifier le mot de passe"}
+              </button>
+              {error && <p className="text-red-500 text-sm">{error}</p>}
+              {success && <p className="text-green-600 text-sm">{success}</p>}
+            </div>
+          </div>
+
+          {/* Codes d'accès : Propriétaire uniquement */}
+          {isOwner && <RoleCodesCard />}
+        </div>
+
+        {/* Colonne droite */}
+        <div className="space-y-4">
+          <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5">
+            <h3 className="text-lg font-bold text-[#0b3aa8] flex items-center gap-3 mb-3"><span className="w-9 h-9 rounded-full bg-[#10285e] text-white flex items-center justify-center"><UserCircle2 size={20} /></span> Aperçu du compte</h3>
+            <ul className="text-sm">
+              {[
+                [<User size={18} key="a" />, "Nom", fullName || "—"],
+                [<Mail size={18} key="b" />, "Email", currentUser.email ?? "—"],
+                [<Phone size={18} key="c" />, "Téléphone", phone],
+                [<Shield size={18} key="d" />, "Rôle", currentUser.role ?? "—"],
+              ].map(([ic, l, v]: any) => (
+                <li key={l} className="flex items-center gap-3 py-3.5 border-b">
+                  <span className="text-[#1255d6]">{ic}</span><span className="w-28">{l}</span><span className="flex-1 break-all">{v}</span>
+                </li>
+              ))}
+              <li className="flex items-center gap-3 py-3 border-b">
+                <span className="w-[18px] h-[18px] rounded-full bg-[#1fae6a]" /><span className="w-28">Statut</span>
+                <span className="px-3 py-1 rounded-md bg-[#d9f5e6] text-[#14894f] font-semibold text-xs">{statusLabel}</span>
+              </li>
+              <li className="flex items-center gap-3 py-3.5">
+                <Calendar size={18} className="text-[#1255d6]" /><span className="w-28 text-xs">Dernière connexion</span><span className="flex-1 text-xs">{lastLabel}</span>
+              </li>
+            </ul>
+          </div>
+
+          <div className="bg-white rounded-xl border border-[#dbe5f5] shadow-sm p-5">
+            <h3 className="text-lg font-bold text-[#0b3aa8] flex items-center gap-3 mb-3"><ShieldCheck size={24} className="text-[#1255d6]" /> Sécurité</h3>
+            <ul className="divide-y">
+              {[
+                ["Compte protégé", "Votre compte est sécurisé"],
+                ["Authentification active", "Connexion avec mot de passe"],
+                ["Accès restreint", "Seuls les utilisateurs autorisés peuvent accéder"],
+              ].map(([t, s]) => (
+                <li key={t} className="flex items-center gap-3 py-3">
+                  <span className="w-8 h-8 rounded-full bg-[#1fae6a] text-white flex items-center justify-center shrink-0"><Check size={16} /></span>
+                  <div><p className="text-sm font-medium text-[#0b3aa8]">{t}</p><p className="text-xs text-gray-500">{s}</p></div>
+                </li>
+              ))}
+            </ul>
+            <div className="mt-4 rounded-lg border border-[#b7d4f6] bg-gradient-to-br from-[#eaf4ff] to-[#dbeafb] p-4 flex gap-3">
+              <Lightbulb size={22} className="text-[#1255d6] shrink-0" />
+              <div><p className="font-semibold text-sm text-[#0b3aa8]">Conseil</p><p className="text-xs text-[#3e5788] mt-1">Changez régulièrement votre mot de passe pour une meilleure sécurité de votre compte.</p></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default Profile;

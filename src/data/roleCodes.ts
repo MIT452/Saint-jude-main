@@ -13,7 +13,7 @@ http.interceptors.request.use((cfg) => {
   return cfg;
 });
 
-export type CodeRole = "gestionnaire" | "capitaine" | "admin" | "proprietaire";
+export type CodeRole = "agent" | "gestionnaire" | "capitaine" | "admin" | "proprietaire";
 
 export interface RoleCodeInfo {
   role: CodeRole;
