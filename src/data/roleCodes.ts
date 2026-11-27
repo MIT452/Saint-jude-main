@@ -3,10 +3,7 @@ import axios from "axios";
 /* ⚠️ À aligner sur ton client API existant (src/data/service.ts) :
    même URL de base et même façon d'envoyer l'authentification.
    Le backend expose la route sur /api/auth/role-codes. */
-
-// Retire le "/" final et un éventuel "/api" final, pour éviter /api/api/...
-const rawBase = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
-const API_URL = rawBase.replace(/\/+$/, "").replace(/\/api$/i, "");
+const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
 const ROLE_CODES_PATH = "/api/auth/role-codes";
 
 const http = axios.create({ baseURL: API_URL, withCredentials: true });
@@ -16,7 +13,8 @@ http.interceptors.request.use((cfg) => {
   return cfg;
 });
 
-export type CodeRole = "agent" | "gestionnaire" | "capitaine" | "admin" | "proprietaire";
+/* Le Client n'a jamais de code : seuls les 4 rôles du personnel en ont. */
+export type CodeRole = "agent" | "gestionnaire" | "capitaine" | "proprietaire";
 
 export interface RoleCodeInfo {
   role: CodeRole;
@@ -29,7 +27,6 @@ export interface GeneratedCode {
   role: CodeRole;
   code: string;
   expiresAt: string | null;
-  emailSent?: boolean;
 }
 
 export const fetchRoleCodes = async (): Promise<RoleCodeInfo[]> =>

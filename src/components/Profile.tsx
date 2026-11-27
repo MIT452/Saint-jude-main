@@ -88,8 +88,8 @@ const CODE_ROLES: Array<{ role: CodeRole; label: string; hint: string }> = [
   { role: "agent", label: "Agent", hint: "Sans code actif, l'inscription Agent est libre." },
   { role: "gestionnaire", label: "Gestionnaire", hint: "Code obligatoire à l'inscription." },
   { role: "capitaine", label: "Capitaine", hint: "Code obligatoire à l'inscription." },
-  { role: "admin", label: "Administrateur", hint: "Code obligatoire à l'inscription. Réservé au Propriétaire." },
-  { role: "proprietaire", label: "Propriétaire", hint: "Code obligatoire à l'inscription. Réservé au Propriétaire." },
+  { role: "admin", label: "Administrateur", hint: "Code obligatoire à l'inscription." },
+  { role: "proprietaire", label: "Propriétaire", hint: "Code obligatoire à l'inscription." },
 ];
 const roleLabel = (role: CodeRole) => CODE_ROLES.find((r) => r.role === role)?.label ?? role;
 
@@ -100,10 +100,7 @@ const formatDate = (iso: string | null | undefined) => {
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}/${d.getFullYear()}`;
 };
 
-// MODIF : prop isOwner. L'Administrateur ne voit pas les codes Administrateur et Propriétaire.
-const RoleCodesCard = ({ isOwner }: { isOwner: boolean }) => {
-  const visibleRoles = isOwner ? CODE_ROLES : CODE_ROLES.filter((r) => r.role !== "admin" && r.role !== "proprietaire");
-
+const RoleCodesCard = () => {
   const [codes, setCodes] = useState<RoleCodeInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyRole, setBusyRole] = useState<CodeRole | null>(null);
@@ -132,7 +129,6 @@ const RoleCodesCard = ({ isOwner }: { isOwner: boolean }) => {
       const result = await generateRoleCode(role, days[role]);
       setGenerated(result);
       await load();
-      // MODIF : message selon l'envoi de l'e-mail
       toast(
         result.emailSent
           ? "Nouveau code généré et envoyé par e-mail."
@@ -200,7 +196,7 @@ const RoleCodesCard = ({ isOwner }: { isOwner: boolean }) => {
       )}
 
       <div className="space-y-3">
-        {visibleRoles.map(({ role, label, hint }) => {
+        {CODE_ROLES.map(({ role, label, hint }) => {
           const info = infoFor(role);
           const expired = !!info?.expiresAt && new Date(info.expiresAt).getTime() < Date.now();
           const active = !!info?.isActive && !expired;
@@ -327,8 +323,7 @@ const Profile = () => {
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const canSubmit = !!oldPassword.trim() && isStrong(newPassword) && newPassword === confirmPassword && !busy;
   const roleText = String(currentUser.role ?? "");
-  const isOwner = /propri/i.test(roleText); // MODIF
-  const isAdmin = /admin/i.test(roleText); // MODIF
+  const canManageCodes = /propri|admin/i.test(roleText); // Propriétaire ou Administrateur
 
   const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -370,7 +365,7 @@ const Profile = () => {
             {photo
               ? <img src={photo} alt="" className="w-9 h-9 rounded-full object-cover" />
               : <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={20} /></div>}
-            <span className="text-sm">{currentUser.role === "Propriétaire" ? "Propriétaire" : currentUser.name}</span>{/* MODIF : affiche « Propriétaire » (et non « Administrateur ») */}
+            <span className="text-sm">{currentUser.role === "Propriétaire" ? "Propriétaire" : currentUser.name}</span>
             <ChevronDown size={14} />
           </div>
           <div className="flex items-center gap-2 text-xs">
@@ -443,8 +438,8 @@ const Profile = () => {
             </div>
           </div>
 
-          {/* Codes d'accès : Propriétaire et Administrateur (l'Administrateur ne voit pas les codes Administrateur / Propriétaire) */}
-          {(isOwner || isAdmin) && <RoleCodesCard isOwner={isOwner} />}
+          {/* Codes d'accès : Propriétaire et Administrateur (mêmes droits, les 5 rôles) */}
+          {canManageCodes && <RoleCodesCard />}
         </div>
 
         {/* Colonne droite */}

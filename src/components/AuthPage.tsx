@@ -25,19 +25,19 @@ const SEA = "linear-gradient(160deg,#1f74d6 0%,#3b8fe0 40%,#0d4aa8 100%)";
 const LOGIN_BG = LOGIN_PHOTO ? `url(${photoUrl(LOGIN_PHOTO)}), ${SEA}` : SEA;
 const SHIP_SRC = SHIP_PHOTO ? photoUrl(SHIP_PHOTO) : SHIP_FALLBACK;
 
-/* Rôles proposés à l'inscription :
-   - Agent : inscription publique, sans code
-   - Gestionnaire / Capitaine / Administrateur / Propriétaire : code d'accès obligatoire
-     (toujours revérifié côté serveur) */
-const DEFAULT_ROLE = "agent" as Role;
+/* Les 5 rôles de SAINT-JUDE à l'inscription :
+   - Client / Voyageur : inscription publique, rôle attribué automatiquement, aucun code
+   - Agent / Gestionnaire / Capitaine / Propriétaire-Administrateur : code d'accès
+     généré par le Propriétaire (toujours revérifié côté serveur) */
+const DEFAULT_ROLE = "client" as Role;
 const ROLE_OPTIONS: Array<{ value: Role; label: string }> = [
+  { value: "client" as Role, label: "Client / Voyageur" },
   { value: "agent" as Role, label: "Agent" },
   { value: "gestionnaire" as Role, label: "Gestionnaire" },
   { value: "capitaine" as Role, label: "Capitaine" },
-  { value: "admin" as Role, label: "Administrateur" },
-  { value: "proprietaire" as Role, label: "Propriétaire" },
+  { value: "proprietaire" as Role, label: "Propriétaire / Administrateur" },
 ];
-const ROLES_WITH_CODE: string[] = ["gestionnaire", "capitaine", "admin", "proprietaire"];
+const ROLES_WITH_CODE: string[] = ["agent", "gestionnaire", "capitaine", "proprietaire"];
 const needsCode = (r: Role) => ROLES_WITH_CODE.includes(String(r));
 const roleLabel = (r: Role) => ROLE_OPTIONS.find((o) => String(o.value) === String(r))?.label ?? String(r);
 
@@ -411,10 +411,14 @@ const AuthPage = () => {
                     ))}
                   </select>
                 </div>
-                {!codeRequired && <p className="mt-1 text-xs text-[#3e5788]">Compte Agent : aucun code requis.</p>}
+                {!codeRequired && (
+                  <p className="mt-1 text-xs text-[#3e5788]">
+                    Compte Client / Voyageur : aucun code requis. Vous pourrez consulter les bateaux et réserver avec l'assistant IA.
+                  </p>
+                )}
               </div>
 
-              {/* Code d'accès : Gestionnaire / Capitaine / Administrateur / Propriétaire */}
+              {/* Code d'accès : rôles du personnel uniquement */}
               {codeRequired && (
                 <div className="space-y-2 rounded-xl border border-[#c7defa] bg-[#eaf3ff] p-3">
                   <Field
@@ -428,7 +432,7 @@ const AuthPage = () => {
                     autoComplete="off"
                   />
                   <p className="text-xs text-[#3e5788]">
-                    Ce rôle est protégé : le code est vérifié par le serveur et peut expirer.
+                    Ce rôle est réservé au personnel : le code est remis par le Propriétaire, vérifié par le serveur et peut expirer.
                   </p>
                 </div>
               )}
