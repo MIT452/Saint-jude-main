@@ -1,19 +1,21 @@
 import axios from "axios";
 
-/* ⚠️ À aligner sur ton client API existant (src/data/service.ts) :
-   même URL de base et même façon d'envoyer l'authentification.
-   Le backend expose la route sur /api/auth/role-codes. */
-const API_URL = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+const RAW = ((import.meta.env.VITE_API_URL as string | undefined) ?? "").replace(/\/+$/, "");
+const BASE = RAW.endsWith("/api") ? RAW.slice(0, -4) : RAW;
 const ROLE_CODES_PATH = "/api/auth/role-codes";
 
-const http = axios.create({ baseURL: API_URL, withCredentials: true });
+const getToken = () =>
+  ["token", "accessToken", "authToken", "jwt"]
+    .map((k) => { try { return localStorage.getItem(k); } catch { return null; } })
+    .find(Boolean);
+
+const http = axios.create({ baseURL: BASE, withCredentials: true });
 http.interceptors.request.use((cfg) => {
-  const token = localStorage.getItem("token");
+  const token = getToken();
   if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
 });
 
-/* Le Client n'a jamais de code : seuls les 4 rôles du personnel en ont. */
 export type CodeRole = "agent" | "gestionnaire" | "capitaine" | "proprietaire";
 
 export interface RoleCodeInfo {
