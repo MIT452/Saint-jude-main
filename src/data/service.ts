@@ -18,7 +18,9 @@ export type Role =
   | "gestionnaire"
   | "comptable"
   | "caissier"
-  | "capitaine";
+  | "capitaine"
+  | "agent"
+  | "client";
 
 export type Action = "create" | "read" | "update" | "delete";
 
@@ -32,6 +34,8 @@ export const ROLES: Role[] = [
   "comptable",
   "caissier",
   "capitaine",
+  "agent",
+  "client",
 ];
 
 export const ROLE_LABELS: Record<Role, string> = {
@@ -44,12 +48,15 @@ export const ROLE_LABELS: Record<Role, string> = {
   comptable: "Comptable",
   caissier: "Caissier",
   capitaine: "Capitaine",
+  agent: "Agent",
+  client: "Client / Voyageur",
 };
 
 // Rôles proposés dans le formulaire d'inscription public.
 // Chacun exige un code d'accès vérifié par le serveur ; les rôles à privilèges élevés
 // (admin, propriétaire, directeur) ne sont jamais proposés.
-export const PUBLIC_ROLES: Role[] = ["manager", "gestionnaire", "comptable", "caissier", "capitaine"];
+// Le Client s'inscrit librement (sans code) : il n'est pas listé ici.
+export const PUBLIC_ROLES: Role[] = ["agent", "manager", "gestionnaire", "comptable", "caissier", "capitaine"];
 
 // Ressources autorisées par rôle et par action ("*" = toutes les ressources).
 // Une ressource absente de la liste est refusée côté interface.
@@ -102,6 +109,20 @@ const PERMISSIONS: Record<Role, Partial<Record<Action, string[] | "*">>> = {
     create: ["cashmovement", "reservation"],
     read: ["reservation", "trip", "boat", "goods", "cashmovement"],
     update: ["cashmovement"],
+  },
+  // Agent : enregistre les réservations des clients et les paiements
+  agent: {
+    create: ["reservation", "goods", "cashmovement"],
+    read: ["reservation", "trip", "boat", "goods", "cashmovement", "place"],
+    update: ["reservation", "goods"],
+  },
+  // Client / Voyageur : consulte les trajets et bateaux, crée et suit ses réservations.
+  // Aucun accès à la caisse, au carburant ni aux utilisateurs.
+  // (le backend doit filtrer "reservation" pour ne renvoyer que celles du client)
+  client: {
+    create: ["reservation"],
+    read: ["trip", "boat", "place", "reservation"],
+    update: ["reservation"],
   },
 };
 
