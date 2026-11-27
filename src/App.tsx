@@ -16,6 +16,7 @@ import DataAnalysis from "./components/DataAnalysis";
 import NotificationSettingsPanel from "./components/NotificationSettingsPanel";
 import AssistantIAPage from "./components/AssistantIAPage";
 import PassengerReservation from "./components/PassengerReservation";
+import { createReservation } from "./services/reservationService";
 import { useSelector } from "react-redux";
 import { RootState } from "./redux";
 import { menuItems, clientMenuItems, isClientRole } from "./components/SidebarMenue";
@@ -78,7 +79,16 @@ const App = () => {
         return <DataAnalysis />
       /* ----- Espace Client / Voyageur ----- */
       case "clientBoats":
-        return <PassengerReservation />
+        return (
+          <PassengerReservation
+            onAdd={async (reservation) => {
+              // En cas d'erreur, createReservation lève une exception :
+              // PassengerReservation l'affiche dans son bandeau rouge.
+              await createReservation(reservation);
+              setActiveTab("clientReservations");
+            }}
+          />
+        )
       case "clientReservations":
         return <ReservationExperience />
       case "clientAssistant":

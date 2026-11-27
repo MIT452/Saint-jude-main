@@ -100,7 +100,8 @@ const CODE_ROLES: Array<{ role: CodeRole; label: string; hint: string }> = [
   { role: "agent", label: "Agent", hint: "Enregistre les réservations des clients et les paiements." },
   { role: "gestionnaire", label: "Gestionnaire", hint: "Réservations, trajets, marchandises, caisse, carburant, statistiques." },
   { role: "capitaine", label: "Capitaine", hint: "Voyages de son bateau, carburant, position." },
-  { role: "proprietaire", label: "Propriétaire / Administrateur", hint: "Tous les droits. Ne partagez ce code qu'avec une personne de confiance." },
+  { role: "admin", label: "Administrateur", hint: "Gestion complète du système. Ne partagez ce code qu'avec une personne de confiance." },
+  { role: "proprietaire", label: "Propriétaire", hint: "Tous les droits. Ne partagez ce code qu'avec une personne de confiance." },
 ];
 const roleLabel = (role: CodeRole) => CODE_ROLES.find((r) => r.role === role)?.label ?? role;
 
@@ -115,7 +116,13 @@ const RoleCodesCard = () => {
   const [codes, setCodes] = useState<RoleCodeInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyRole, setBusyRole] = useState<CodeRole | null>(null);
-  const [days, setDays] = useState<Record<CodeRole, number>>({ agent: 30, gestionnaire: 30, capitaine: 30, proprietaire: 30 });
+  const [days, setDays] = useState<Record<CodeRole, number>>({
+    agent: 30,
+    gestionnaire: 30,
+    capitaine: 30,
+    admin: 30,
+    proprietaire: 30,
+  });
   const [generated, setGenerated] = useState<GeneratedCode | null>(null);
 
   const load = useCallback(async () => {
@@ -181,8 +188,8 @@ const RoleCodesCard = () => {
         <ShieldCheck size={26} className="shrink-0" />
         <p>
           Le Client / Voyageur s'inscrit librement et reçoit le rôle Client automatiquement. Les rôles du personnel (Agent, Gestionnaire, Capitaine,
-          Propriétaire) exigent un code que vous générez ici et remettez à la personne. Le code n'est affiché qu'une seule fois : seule son
-          empreinte est conservée dans la base.
+          Administrateur, Propriétaire) exigent un code que vous générez ici et remettez à la personne. Le code n'est affiché qu'une seule fois :
+          seule son empreinte est conservée dans la base.
         </p>
       </div>
 
