@@ -1,22 +1,30 @@
 import axios from "axios";
 
-const RAW = ((import.meta.env.VITE_API_URL as string | undefined) ?? "").replace(/\/+$/, "");
-const BASE = RAW.endsWith("/api") ? RAW.slice(0, -4) : RAW;
+// Retire le "/" final et un éventuel "/api" final, pour éviter /api/api/...
+const rawBase = (import.meta.env.VITE_API_URL as string | undefined) ?? "";
+const API_URL = rawBase.replace(/\/+$/, "").replace(/\/api$/i, "");
 const ROLE_CODES_PATH = "/api/auth/role-codes";
 
-const getToken = () =>
-  ["token", "accessToken", "authToken", "jwt"]
-    .map((k) => { try { return localStorage.getItem(k); } catch { return null; } })
-    .find(Boolean);
+const getToken = (): string | null => {
+  for (const k of ["token", "accessToken", "authToken", "jwt"]) {
+    try {
+      const v = localStorage.getItem(k);
+      if (v) return v;
+    } catch {
+      /* localStorage indisponible */
+    }
+  }
+  return null;
+};
 
-const http = axios.create({ baseURL: BASE, withCredentials: true });
+const http = axios.create({ baseURL: API_URL, withCredentials: true });
 http.interceptors.request.use((cfg) => {
   const token = getToken();
   if (token) cfg.headers.Authorization = `Bearer ${token}`;
   return cfg;
 });
 
-export type CodeRole = "agent" | "gestionnaire" | "capitaine" | "proprietaire";
+export type CodeRole = "agent" | "gestionnaire" | "capitaine" | "admin" | "proprietaire";
 
 export interface RoleCodeInfo {
   role: CodeRole;
@@ -29,6 +37,7 @@ export interface GeneratedCode {
   role: CodeRole;
   code: string;
   expiresAt: string | null;
+  emailSent?: boolean;
 }
 
 export const fetchRoleCodes = async (): Promise<RoleCodeInfo[]> =>
