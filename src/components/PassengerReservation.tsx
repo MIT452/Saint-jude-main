@@ -167,6 +167,10 @@ export default function PassengerReservation({
   const [step] = useState(1);
   const [now, setNow] = useState(() => new Date());
 
+  // Saisie manuelle des prix : null = valeur automatique (tarif du voyage / calcul)
+  const [priceInput, setPriceInput] = useState<string | null>(null);
+  const [totalInput, setTotalInput] = useState<string | null>(null);
+
   // Horloge en direct (carte « Heure actuelle »)
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 1000 * 15);
@@ -188,27 +192,57 @@ export default function PassengerReservation({
     return (trip ?? []).filter((t) => new Date(t.depart).toDateString() === today).length;
   }, [trip]);
 
-  // Tarif lu sur le voyage choisi : prix au kilo x poids
-  const pricePerKg = useMemo(() => {
+  // Tarif suggéré par le voyage choisi (prix au kilo), 0 si aucun trajet correspondant
+  const tripPricePerKg = useMemo(() => {
     const same = (a?: string, b?: string) => (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
     const match = (trip ?? [])
-      .filter((t) => same(t.from, form.departure) && same(t.to, form.destination) && String(t.depart).slice(0, 10) === form.date)
+      .filter(
+        (t) =>
+          same(t.from, form.departure) &&
+          same(t.to, form.destination) &&
+          String(t.depart).slice(0, 10) === form.date,
+      )
       .sort((a, b) => String(a.depart).localeCompare(String(b.depart)))[0];
     return Number((match as unknown as { pricePerKg?: number | string } | undefined)?.pricePerKg) || 0;
   }, [trip, form.departure, form.destination, form.date]);
 
-  const totalPrice = pricePerKg * (Number(form.weightKg) || 0);
+  const weight = Number(form.weightKg) || 0;
+
+  // Prix au kilo : saisie manuelle, sinon tarif du voyage
+  let pricePerKg = priceInput !== null ? Number(priceInput) || 0 : tripPricePerKg;
+
+  // Total calculé automatiquement
+  const computedTotal = pricePerKg * weight;
+
+  // Total : saisie manuelle, sinon calcul
+  const totalPrice = totalInput !== null ? Number(totalInput) || 0 : computedTotal;
+
+  // Si le total est saisi à la main sans prix au kilo, on le déduit du poids
+  if (totalInput !== null && !pricePerKg && weight > 0) {
+    pricePerKg = totalPrice / weight;
+  }
 
   const update = <K extends keyof ReturnType<typeof makeInitialForm>>(
     key: K,
     value: ReturnType<typeof makeInitialForm>[K],
   ) => {
     setForm((current) => ({ ...current, [key]: value }));
+    // Le trajet change : on revient au tarif automatique
+    if (key === "departure" || key === "destination" || key === "date") {
+      setPriceInput(null);
+      setTotalInput(null);
+    }
+    // Le poids change : le total se recalcule
+    if (key === "weightKg") {
+      setTotalInput(null);
+    }
     setError("");
   };
 
   const reset = () => {
     setForm(makeInitialForm());
+    setPriceInput(null);
+    setTotalInput(null);
     setError("");
   };
 
@@ -461,16 +495,34 @@ export default function PassengerReservation({
                   </Select>
                 </Field>
                 <Field label="Prix au kilo (Ar/kg)" htmlFor="pricePerKg">
-                  <IconInput icon={Coins} id="pricePerKg" value={pricePerKg ? pricePerKg.toLocaleString("fr-FR") : ""} readOnly placeholder="Tarif non defini" className="bg-blue-50/60" />
+                  <IconInput
+                    icon={Coins}
+                    id="pricePerKg"
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={priceInput ?? (tripPricePerKg ? String(tripPricePerKg) : "")}
+                    onChange={(e) => {
+                      setPriceInput(e.target.value);
+                      setTotalInput(null); // le total se recalcule
+                      setError("");
+                    }}
+                    placeholder="Ex. : 500"
+                  />
                 </Field>
                 <Field label="Prix total (Ar)" htmlFor="totalPrice">
                   <IconInput
                     icon={Coins}
                     id="totalPrice"
-                    value={totalPrice ? totalPrice.toLocaleString("fr-FR") : ""}
-                    readOnly
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={totalInput ?? (computedTotal ? String(computedTotal) : "")}
+                    onChange={(e) => {
+                      setTotalInput(e.target.value);
+                      setError("");
+                    }}
                     placeholder="0"
-                    className="bg-blue-50/60"
                   />
                 </Field>
                 <Field label="Poids total (kg)" required htmlFor="weightKg">
