@@ -52,7 +52,6 @@ const makeInitialForm = () => ({
   cargoType: "none",
   weightKg: 0,
   notes: "",
-  unitPrice: 0,
   communication: "whatsapp" as "whatsapp" | "email" | "both" | "none",
 });
 
@@ -189,7 +188,16 @@ export default function PassengerReservation({
     return (trip ?? []).filter((t) => new Date(t.depart).toDateString() === today).length;
   }, [trip]);
 
-  const totalPrice = form.unitPrice * form.passengers;
+  // Tarif lu sur le voyage choisi : prix au kilo x poids
+  const pricePerKg = useMemo(() => {
+    const same = (a?: string, b?: string) => (a ?? "").trim().toLowerCase() === (b ?? "").trim().toLowerCase();
+    const match = (trip ?? [])
+      .filter((t) => same(t.from, form.departure) && same(t.to, form.destination) && String(t.depart).slice(0, 10) === form.date)
+      .sort((a, b) => String(a.depart).localeCompare(String(b.depart)))[0];
+    return Number((match as unknown as { pricePerKg?: number | string } | undefined)?.pricePerKg) || 0;
+  }, [trip, form.departure, form.destination, form.date]);
+
+  const totalPrice = pricePerKg * (Number(form.weightKg) || 0);
 
   const update = <K extends keyof ReturnType<typeof makeInitialForm>>(
     key: K,
@@ -239,7 +247,7 @@ export default function PassengerReservation({
         cargoType: hasCargo ? form.cargoType : "Aucune",
         unitWeightKg: Math.round((totalWeightKg / passengers) * 100) / 100,
         totalWeightKg,
-        unitPrice: Number(form.unitPrice),
+        unitPrice: pricePerKg,
         totalPrice: Number(totalPrice),
         communication: form.communication,
         status: "En attente de confirmation",
@@ -452,17 +460,8 @@ export default function PassengerReservation({
                     </SelectContent>
                   </Select>
                 </Field>
-                <Field label="Prix unitaire (Ar)" htmlFor="unitPrice">
-                  <IconInput
-                    icon={Coins}
-                    id="unitPrice"
-                    type="number"
-                    min="0"
-                    value={form.unitPrice || ""}
-                    onChange={(e) => update("unitPrice", Number(e.target.value))}
-                    placeholder="0"
-                    className="bg-blue-50/60"
-                  />
+                <Field label="Prix au kilo (Ar/kg)" htmlFor="pricePerKg">
+                  <IconInput icon={Coins} id="pricePerKg" value={pricePerKg ? pricePerKg.toLocaleString("fr-FR") : ""} readOnly placeholder="Tarif non defini" className="bg-blue-50/60" />
                 </Field>
                 <Field label="Prix total (Ar)" htmlFor="totalPrice">
                   <IconInput
