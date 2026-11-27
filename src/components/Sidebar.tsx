@@ -1,24 +1,32 @@
 import { FC, useState } from "react";
+import type { ElementType } from "react";
 import { Ship, Menu, X, LogOut, Settings } from "lucide-react";
 import { cn } from "./ui/utils";
 import { Button } from "./ui/button";
 import { useDispatch, useSelector } from "react-redux";
 import type { AppDispatch, RootState } from "../redux/index";
 import { logout } from "../redux/feature/users";
-import { menuItems } from "./SidebarMenue";
+import { menuItems, clientMenuItems, isClientRole } from "./SidebarMenue";
 
 interface SidebarProps {
   activeTab: string;
   onTabChange: (tab: string) => void;
 }
 
+interface MenuEntry {
+  id: string;
+  label: string;
+  icon?: ElementType;
+  description?: string;
+}
+
 // Entrée "Configuration" (WhatsApp et e-mail), ajoutée sous "Réservations multimodales"
-const configItem = {
+const configItem: MenuEntry = {
   id: "notificationSettings",
   label: "Configuration",
   icon: Settings,
   description: "WhatsApp et e-mail",
-} as unknown as (typeof menuItems)[number];
+};
 
 const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
   const date = new Date();
@@ -34,18 +42,21 @@ const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
       ]
     : [];
 
-  const baseMenu = menuItems.filter(
+  const baseMenu: MenuEntry[] = menuItems.filter(
     (item) => item.id !== "notificationSettings" && userPermissions.includes(item.permission)
   );
 
   // Visible uniquement pour le propriétaire et l'administrateur
   const canConfig = /propri|admin/i.test(String(currentUser?.role ?? ""));
   const idx = baseMenu.findIndex((item) => item.id === "reservations");
-  const filteredMenu = canConfig
+  const staffMenu: MenuEntry[] = canConfig
     ? idx >= 0
       ? [...baseMenu.slice(0, idx + 1), configItem, ...baseMenu.slice(idx + 1)]
       : [...baseMenu, configItem]
     : baseMenu;
+
+  // Le Client / Voyageur voit uniquement ses 4 entrées
+  const filteredMenu: MenuEntry[] = isClientRole(currentUser?.role) ? clientMenuItems : staffMenu;
 
   const handleLogout = () => {
     dispatch(logout());
@@ -123,7 +134,7 @@ const Sidebar: FC<SidebarProps> = ({ activeTab, onTabChange }) => {
                     : "text-sidebar-foreground hover:bg-sidebar-accent/50 hover:text-sidebar-accent-foreground"
                 }`}
               >
-                <Icon className="h-5 w-5" />
+                {Icon && <Icon className="h-5 w-5" />}
                 {!isCollapsed && (
                   <div className="flex-1">
                     <div className="font-medium">{item.label}</div>

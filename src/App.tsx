@@ -14,9 +14,11 @@ import IntelligenceDashboard from "./components/IntelligenceDashboard";
 import ReservationExperience from "./components/ReservationExperience";
 import DataAnalysis from "./components/DataAnalysis";
 import NotificationSettingsPanel from "./components/NotificationSettingsPanel";
+import AssistantIAPage from "./components/AssistantIAPage";
+import PassengerReservation from "./components/PassengerReservation";
 import { useSelector } from "react-redux";
 import { RootState } from "./redux";
-import { menuItems } from "./components/SidebarMenue";
+import { menuItems, clientMenuItems, isClientRole } from "./components/SidebarMenue";
 import { fetchDatabase } from "./redux/thunk/featchData";
 import { useAppDispatch } from "./redux/hooks";
 
@@ -27,6 +29,9 @@ const App = () => {
   useEffect(() => {
     dispatch(fetchDatabase());
   }, []);
+
+  const isClient = isClientRole(currentUser?.role);
+
   // Récupère les permissions de l'utilisateur selon son rôle
   const userPermissions = currentUser
     ? [
@@ -34,22 +39,23 @@ const App = () => {
       ...(currentUser.permissions || []),
     ]
     : [];
-  const firstAllowedMenu = menuItems.find(item =>
-    userPermissions.includes(item.permission)
-  );
+  const firstAllowedMenu = isClient
+    ? clientMenuItems[0]
+    : menuItems.find(item => userPermissions.includes(item.permission));
   const [activeTab, setActiveTab] = useState(firstAllowedMenu?.id || "profile");
-  const onChangeNav = (value: string) => {
-    setActiveTab(value);
-  }
+
+  // Un Client ne peut ouvrir que ses 4 pages ; sinon retour à sa première entrée
+  const clientIds = clientMenuItems.map((item) => item.id);
+  const safeTab = isClient && !clientIds.includes(activeTab) ? clientIds[0] : activeTab;
 
   const renderContent = () => {
-    switch (activeTab) {
+    switch (safeTab) {
       case "dashboard":
-        return <Dashboard onSetToAudit={onChangeNav} />
+        return <Dashboard onSetToAudit={setActiveTab} />
       case "merchandise":
         return <Goods />
       case "casing":
-        return <CashMouvement onSetTofeuldManage={onChangeNav} />
+        return <CashMouvement onSetTofeuldManage={setActiveTab} />
       case 'boat':
         return <BoatComponant />
       case "trajets":
@@ -70,6 +76,13 @@ const App = () => {
         return <NotificationSettingsPanel />
       case "analytics":
         return <DataAnalysis />
+      /* ----- Espace Client / Voyageur ----- */
+      case "clientBoats":
+        return <PassengerReservation />
+      case "clientReservations":
+        return <ReservationExperience />
+      case "clientAssistant":
+        return <AssistantIAPage />
       default:
         return <Profile />
     }
@@ -77,7 +90,7 @@ const App = () => {
 
   return (
     <div className="size-full flex bg-background">
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
+      <Sidebar activeTab={safeTab} onTabChange={setActiveTab} />
       <main className="w-full h-[100vh] overflow-auto">
         <div className="p-4">
           {renderContent()}
@@ -88,7 +101,6 @@ const App = () => {
           hideProgressBar={false}
           newestOnTop={false}
           closeOnClick
-          rtl={false}
           pauseOnFocusLoss
           draggable
           pauseOnHover

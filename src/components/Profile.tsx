@@ -17,6 +17,18 @@ const pick = (u: any, ...keys: string[]) => { for (const k of keys) if (u?.[k] !
 
 const isStrong = (p: string) => p.length >= 8 && /[A-Z]/.test(p) && /[a-z]/.test(p) && /\d/.test(p) && /[^A-Za-z0-9]/.test(p);
 
+// 261348458240 -> +261 34 84 58 240
+const formatPhone = (raw: unknown): string => {
+  const original = String(raw ?? "").trim();
+  const digits = original.replace(/\D/g, "");
+  if (!digits) return "—";
+  const local = digits.startsWith("261") ? digits.slice(3) : digits.replace(/^0/, "");
+  if (local.length === 9) {
+    return `+261 ${local.slice(0, 2)} ${local.slice(2, 4)} ${local.slice(4, 6)} ${local.slice(6)}`;
+  }
+  return original;
+};
+
 /* ---------- Photo de profil : conservée dans le navigateur (une photo par utilisateur) ---------- */
 const photoKey = (id: unknown) => `profilePhoto:${String(id ?? "")}`;
 
@@ -83,13 +95,12 @@ const PwdField = ({ label, placeholder, value, onChange, error }: { label: strin
   );
 };
 
-/* ---------- Codes d'accès des rôles (Propriétaire et Administrateur) ---------- */
+/* ---------- Codes d'accès des rôles du personnel (Propriétaire uniquement) ---------- */
 const CODE_ROLES: Array<{ role: CodeRole; label: string; hint: string }> = [
-  { role: "agent", label: "Agent", hint: "Sans code actif, l'inscription Agent est libre." },
-  { role: "gestionnaire", label: "Gestionnaire", hint: "Code obligatoire à l'inscription." },
-  { role: "capitaine", label: "Capitaine", hint: "Code obligatoire à l'inscription." },
-  { role: "admin", label: "Administrateur", hint: "Code obligatoire à l'inscription." },
-  { role: "proprietaire", label: "Propriétaire", hint: "Code obligatoire à l'inscription." },
+  { role: "agent", label: "Agent", hint: "Enregistre les réservations des clients et les paiements." },
+  { role: "gestionnaire", label: "Gestionnaire", hint: "Réservations, trajets, marchandises, caisse, carburant, statistiques." },
+  { role: "capitaine", label: "Capitaine", hint: "Voyages de son bateau, carburant, position." },
+  { role: "proprietaire", label: "Propriétaire / Administrateur", hint: "Tous les droits. Ne partagez ce code qu'avec une personne de confiance." },
 ];
 const roleLabel = (role: CodeRole) => CODE_ROLES.find((r) => r.role === role)?.label ?? role;
 
@@ -104,7 +115,7 @@ const RoleCodesCard = () => {
   const [codes, setCodes] = useState<RoleCodeInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyRole, setBusyRole] = useState<CodeRole | null>(null);
-  const [days, setDays] = useState<Record<CodeRole, number>>({ agent: 30, gestionnaire: 30, capitaine: 30, admin: 30, proprietaire: 30 });
+  const [days, setDays] = useState<Record<CodeRole, number>>({ agent: 30, gestionnaire: 30, capitaine: 30, proprietaire: 30 });
   const [generated, setGenerated] = useState<GeneratedCode | null>(null);
 
   const load = useCallback(async () => {
@@ -129,11 +140,7 @@ const RoleCodesCard = () => {
       const result = await generateRoleCode(role, days[role]);
       setGenerated(result);
       await load();
-      toast(
-        result.emailSent
-          ? "Nouveau code généré et envoyé par e-mail."
-          : "Nouveau code généré. E-mail non envoyé : copiez le code maintenant.",
-      );
+      toast("Nouveau code généré. Copiez-le maintenant.");
     } catch {
       toast("Échec de la génération du code.");
     } finally {
@@ -173,9 +180,9 @@ const RoleCodesCard = () => {
       <div className="flex items-center gap-3 bg-[#eaf3ff] border border-[#c7defa] rounded-lg px-4 py-3 text-xs text-[#1d4fb8] mb-4">
         <ShieldCheck size={26} className="shrink-0" />
         <p>
-          Ces codes permettent à un nouvel utilisateur de s'inscrire avec le rôle correspondant. Pour l'Agent, tant qu'aucun code n'est actif,
-          l'inscription reste libre ; dès qu'un code Agent est actif, il devient obligatoire. Le code n'est affiché qu'une seule fois : seule son
-          empreinte est conservée dans la base. Ne partagez le code Propriétaire ou Administrateur qu'avec des personnes de confiance.
+          Le Client / Voyageur s'inscrit librement et reçoit le rôle Client automatiquement. Les rôles du personnel (Agent, Gestionnaire, Capitaine,
+          Propriétaire) exigent un code que vous générez ici et remettez à la personne. Le code n'est affiché qu'une seule fois : seule son
+          empreinte est conservée dans la base.
         </p>
       </div>
 
@@ -202,22 +209,12 @@ const RoleCodesCard = () => {
           const active = !!info?.isActive && !expired;
           const busy = busyRole === role;
           const hasCode = !!info?.isActive; // actif ou expiré (toujours à renouveler / désactiver)
-          const statusText = loading
-            ? "Chargement…"
-            : active
-              ? "Actif"
-              : expired
-                ? "Expiré"
-                : role === "agent"
-                  ? "Libre (sans code)"
-                  : "Aucun code actif";
-          const statusGood = active || (!hasCode && role === "agent" && !loading);
           return (
             <div key={role} className="rounded-lg border border-[#cfdcf3] p-3">
               <div className="flex flex-wrap items-center gap-3">
-                <span className="font-semibold text-[#10285e] w-32">{label}</span>
-                <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${statusGood ? "bg-[#d9f5e6] text-[#14894f]" : "bg-[#fde8e8] text-[#b42318]"}`}>
-                  {statusText}
+                <span className="font-semibold text-[#10285e]">{label}</span>
+                <span className={`px-2.5 py-1 rounded-md text-xs font-semibold ${active ? "bg-[#d9f5e6] text-[#14894f]" : "bg-[#fde8e8] text-[#b42318]"}`}>
+                  {loading ? "Chargement…" : active ? "Actif" : expired ? "Expiré" : "Aucun code actif"}
                 </span>
                 {hasCode && <span className="text-xs text-[#3e5788]">Expire le {formatDate(info?.expiresAt)}</span>}
               </div>
@@ -245,7 +242,7 @@ const RoleCodesCard = () => {
                     disabled={busy}
                     className="h-10 px-4 rounded-lg border border-red-300 text-red-600 text-sm font-semibold flex items-center gap-2 hover:bg-red-50 disabled:opacity-60"
                   >
-                    <Trash2 size={15} /> {role === "agent" ? "Désactiver (inscription libre)" : "Désactiver"}
+                    <Trash2 size={15} /> Désactiver
                   </button>
                 )}
               </div>
@@ -312,18 +309,18 @@ const Profile = () => {
   if (!currentUser) return <p>Veuillez vous connecter.</p>;
 
   const u: any = currentUser;
-  const phone = pick(u, "phone", "telephone", "tel", "phoneNumber", "contact") ?? "—";
+  const phone = formatPhone(pick(u, "phone", "telephone", "tel", "phoneNumber", "contact"));
   const statusRaw = String(pick(u, "status", "statut", "state") ?? "");
   const statusLabel = /cong/i.test(statusRaw) ? "Congé" : /abs|inactif|inactive/i.test(statusRaw) ? "Absent" : /actif|active/i.test(statusRaw) ? "Actif" : statusRaw || "—";
   const lastRaw = pick(u, "lastLogin", "lastLoginAt", "derniereConnexion", "lastConnection");
   const last = lastRaw ? new Date(lastRaw) : null;
   const lastLabel = last && !isNaN(last.getTime()) ? `${pad(last.getDate())}/${pad(last.getMonth() + 1)}/${last.getFullYear()} à ${pad(last.getHours())}:${pad(last.getMinutes())}` : "—";
+  // name = prénom, lastName = nom (comme à l'inscription)
   const fullName = `${currentUser.name ?? ""} ${currentUser.lastName ?? ""}`.trim();
   const now = new Date();
   const dateLabel = now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
   const canSubmit = !!oldPassword.trim() && isStrong(newPassword) && newPassword === confirmPassword && !busy;
-  const roleText = String(currentUser.role ?? "");
-  const canManageCodes = /propri|admin/i.test(roleText); // Propriétaire ou Administrateur
+  const isOwner = /propri/i.test(String(currentUser.role ?? ""));
 
   const onPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
@@ -365,7 +362,7 @@ const Profile = () => {
             {photo
               ? <img src={photo} alt="" className="w-9 h-9 rounded-full object-cover" />
               : <div className="w-9 h-9 rounded-full bg-[#1255d6] text-white flex items-center justify-center"><UserCircle2 size={20} /></div>}
-            <span className="text-sm">{currentUser.role === "Propriétaire" ? "Propriétaire" : currentUser.name}</span>
+            <span className="text-sm">{currentUser.role === "Propriétaire" ? "Administrateur" : currentUser.name}</span>
             <ChevronDown size={14} />
           </div>
           <div className="flex items-center gap-2 text-xs">
@@ -407,8 +404,8 @@ const Profile = () => {
                 <button onClick={() => fileRef.current?.click()} className="text-xs text-[#1255d6]">Changer la photo</button>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-4">
-                <ReadField label="Nom *" value={currentUser.name ?? "—"} icon={<User size={16} />} />
-                <ReadField label="Prénom *" value={currentUser.lastName ?? "—"} icon={<User size={16} />} />
+                <ReadField label="Nom *" value={currentUser.lastName ?? "—"} icon={<User size={16} />} />
+                <ReadField label="Prénom *" value={currentUser.name ?? "—"} icon={<User size={16} />} />
                 <ReadField label="Email *" value={currentUser.email ?? "—"} icon={<Mail size={16} />} />
                 <ReadField label="Téléphone *" value={phone} icon={<Phone size={16} />} />
                 <ReadField label="Rôle" value={currentUser.role ?? "—"} icon={<Shield size={16} />} chevron />
@@ -438,8 +435,8 @@ const Profile = () => {
             </div>
           </div>
 
-          {/* Codes d'accès : Propriétaire et Administrateur (mêmes droits, les 5 rôles) */}
-          {canManageCodes && <RoleCodesCard />}
+          {/* Codes d'accès : Propriétaire uniquement */}
+          {isOwner && <RoleCodesCard />}
         </div>
 
         {/* Colonne droite */}

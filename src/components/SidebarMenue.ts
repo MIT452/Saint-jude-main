@@ -1,15 +1,17 @@
 import {
   BarChart3,
+  Bot,
+  ClipboardList,
   CreditCard,
   Fuel,
   MapPin,
   Package,
   ScanSearch,
-  Settings,
   Ship,
   User,
   Users,
 } from "lucide-react";
+import type { ElementType } from "react";
 import { Permission } from "../data/type";
 
 export const menuItems = [
@@ -86,7 +88,6 @@ export const menuItems = [
   {
     id: "notificationSettings",
     label: "Configuration",
-    icon: Settings,
     description: "Notifications",
     permission: "users:manage" as Permission,
   },
@@ -98,3 +99,40 @@ export const menuItems = [
     permission: "intelligence:read" as Permission,
   },
 ];
+
+/* ---------- Menu du Client / Voyageur : exactement 4 entrées ---------- */
+export interface ClientMenuItem {
+  id: string;
+  label: string;
+  icon: ElementType;
+  description: string;
+}
+
+export const clientMenuItems: ClientMenuItem[] = [
+  {
+    id: "clientBoats",
+    label: "Bateaux disponibles",
+    icon: Ship,
+    description: "Bateaux et trajets",
+  },
+  {
+    id: "clientReservations",
+    label: "Mes réservations",
+    icon: ClipboardList,
+    description: "Suivi et statuts",
+  },
+  {
+    id: "clientAssistant",
+    label: "Assistant IA",
+    icon: Bot,
+    description: "Réservation multimodale",
+  },
+  {
+    id: "profile",
+    label: "Mon profil",
+    icon: User,
+    description: "Informations personnelles",
+  },
+];
+
+export const isClientRole = (role: unknown) => /client|voyageur/i.test(String(role ?? ""));
