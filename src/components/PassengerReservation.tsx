@@ -13,6 +13,7 @@ import {
   Package,
   Phone,
   Plus,
+  Scale,
   Send,
   Ship,
   User,
@@ -49,6 +50,7 @@ const makeInitialForm = () => ({
   boatId: "",
   passengers: 1,
   cargoType: "none",
+  weightKg: 0,
   notes: "",
   unitPrice: 0,
   communication: "whatsapp" as "whatsapp" | "email" | "both" | "none",
@@ -212,10 +214,16 @@ export default function PassengerReservation({
       setError("Le port de départ et la destination doivent être différents.");
       return;
     }
+    if (!(Number(form.weightKg) > 0)) {
+      setError("Indiquez le poids total (kg) : il doit être supérieur à 0.");
+      return;
+    }
 
     setIsSubmitting(true);
     try {
       const hasCargo = form.cargoType !== "none";
+      const passengers = Math.max(1, Number(form.passengers) || 1);
+      const totalWeightKg = Number(form.weightKg);
       const reservation: ReservationRecord = {
         id: crypto.randomUUID(),
         clientName: form.clientName.trim(),
@@ -226,11 +234,11 @@ export default function PassengerReservation({
         date: form.time ? `${form.date}T${form.time}` : form.date,
         boatId: form.boatId,
         boatName: boat.find((item) => item.id === form.boatId)?.name ?? "Bateau non sélectionné",
-        passengers: Number(form.passengers),
+        passengers,
         cargo: form.notes.trim(),
         cargoType: hasCargo ? form.cargoType : "Aucune",
-        unitWeightKg: 0,
-        totalWeightKg: 0,
+        unitWeightKg: Math.round((totalWeightKg / passengers) * 100) / 100,
+        totalWeightKg,
         unitPrice: Number(form.unitPrice),
         totalPrice: Number(totalPrice),
         communication: form.communication,
@@ -466,13 +474,25 @@ export default function PassengerReservation({
                     className="bg-blue-50/60"
                   />
                 </Field>
+                <Field label="Poids total (kg)" required htmlFor="weightKg">
+                  <IconInput
+                    icon={Scale}
+                    id="weightKg"
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={form.weightKg || ""}
+                    onChange={(e) => update("weightKg", Number(e.target.value))}
+                    placeholder="Ex. : 50"
+                  />
+                </Field>
               </div>
 
               {/* Informations complémentaires */}
               <div className="border-t border-blue-100 bg-blue-50/40 p-5">
                 <Field label="Informations complémentaires" htmlFor="notes">
                   <div className="relative">
-                    <FileText className="pointer-events-none absolute -left-8 top-0 h-5 w-5 text-blue-800" />
+                    <FileText className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-blue-800" />
                     <textarea
                       id="notes"
                       rows={3}
@@ -480,7 +500,7 @@ export default function PassengerReservation({
                       value={form.notes}
                       onChange={(e) => update("notes", e.target.value)}
                       placeholder="Ajouter des notes (ex. : besoins particuliers, contact à bord, etc.)..."
-                      className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 pb-7 text-sm outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                      className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 pb-7 pl-11 text-sm outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
                     />
                     <span className="absolute bottom-2 right-3 text-xs text-slate-400">
                       {form.notes.length}/{NOTES_MAX}
