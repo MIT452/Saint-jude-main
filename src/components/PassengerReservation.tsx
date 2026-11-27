@@ -1,10 +1,7 @@
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { useSelector } from "react-redux";
 import {
-  AlertTriangle,
   Anchor,
-  ArrowRight,
-  CalendarClock,
   CalendarDays,
   CheckCircle2,
   Clock,
@@ -40,14 +37,7 @@ export interface PassengerReservationProps {
 
 const NOTES_MAX = 500;
 
-const pad2 = (n: number) => String(n).padStart(2, "0");
-
-const toLocalIsoDate = (d: Date) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
-
-const todayIso = () => toLocalIsoDate(new Date());
-
-const normalise = (v?: string) =>
-  (v ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+const todayIso = () => new Date().toISOString().slice(0, 10);
 
 const makeInitialForm = () => ({
   clientName: "",
@@ -184,20 +174,6 @@ export default function PassengerReservation({
     return () => window.clearInterval(timer);
   }, []);
 
-  // Voyages programmés : à venir (aujourd'hui compris), hors annulés / terminés, triés par date
-  const upcomingTrips = useMemo(() => {
-    const startOfToday = new Date();
-    startOfToday.setHours(0, 0, 0, 0);
-    return (trip ?? [])
-      .filter((t) => {
-        const d = new Date(t.depart);
-        if (Number.isNaN(d.getTime()) || d < startOfToday) return false;
-        const st = normalise(String((t as unknown as { status?: string }).status ?? ""));
-        return !st.includes("annul") && !st.includes("termin");
-      })
-      .sort((a, b) => new Date(a.depart).getTime() - new Date(b.depart).getTime());
-  }, [trip]);
-
   // Ports proposés : ceux des trajets connus
   const ports = useMemo(() => {
     const set = new Set<string>();
@@ -208,36 +184,10 @@ export default function PassengerReservation({
     return Array.from(set).sort((a, b) => a.localeCompare(b, "fr"));
   }, [trip]);
 
-  // Destinations possibles depuis le départ choisi (sinon tous les ports)
-  const destinationOptions = useMemo(() => {
-    if (!form.departure) return ports;
-    const set = new Set<string>();
-    upcomingTrips.forEach((t) => {
-      if (String(t.from) === form.departure && t.to) set.add(String(t.to));
-    });
-    return set.size > 0 ? Array.from(set).sort((a, b) => a.localeCompare(b, "fr")) : ports;
-  }, [form.departure, upcomingTrips, ports]);
-
   const tripsToday = useMemo(() => {
     const today = new Date().toDateString();
     return (trip ?? []).filter((t) => new Date(t.depart).toDateString() === today).length;
   }, [trip]);
-
-  const boatName = (id: unknown) => boat.find((b) => String(b.id) === String(id))?.name ?? "—";
-
-  // Voyages correspondant au trajet choisi (même date si renseignée)
-  const matchingTrips = useMemo(
-    () =>
-      upcomingTrips.filter(
-        (t) =>
-          String(t.from) === form.departure &&
-          String(t.to) === form.destination &&
-          toLocalIsoDate(new Date(t.depart)) === form.date,
-      ),
-    [upcomingTrips, form.departure, form.destination, form.date],
-  );
-  const routeSelected = !!form.departure && !!form.destination && form.departure !== form.destination;
-  const noTripWarning = routeSelected && !!form.date && matchingTrips.length === 0;
 
   const totalPrice = form.unitPrice * form.passengers;
 
@@ -251,20 +201,6 @@ export default function PassengerReservation({
 
   const reset = () => {
     setForm(makeInitialForm());
-    setError("");
-  };
-
-  // Un clic sur un voyage programmé remplit le formulaire
-  const pickTrip = (t: (typeof upcomingTrips)[number]) => {
-    const d = new Date(t.depart);
-    setForm((current) => ({
-      ...current,
-      departure: String(t.from),
-      destination: String(t.to),
-      date: toLocalIsoDate(d),
-      time: `${pad2(d.getHours())}:${pad2(d.getMinutes())}`,
-      boatId: String(t.boatId),
-    }));
     setError("");
   };
 
@@ -282,12 +218,6 @@ export default function PassengerReservation({
       setError("Indiquez le poids total (kg) : il doit être supérieur à 0.");
       return;
     }
-    if (matchingTrips.length === 0) {
-      setError(
-        `Aucun voyage programmé de ${form.departure} vers ${form.destination} le ${form.date}. Choisissez un voyage dans la liste « Voyages programmés ».`,
-      );
-      return;
-    }
 
     setIsSubmitting(true);
     try {
@@ -303,7 +233,7 @@ export default function PassengerReservation({
         destination: form.destination.trim(),
         date: form.time ? `${form.date}T${form.time}` : form.date,
         boatId: form.boatId,
-        boatName: boat.find((item) => String(item.id) === form.boatId)?.name ?? "Bateau non sélectionné",
+        boatName: boat.find((item) => item.id === form.boatId)?.name ?? "Bateau non sélectionné",
         passengers,
         cargo: form.notes.trim(),
         cargoType: hasCargo ? form.cargoType : "Aucune",
@@ -369,327 +299,248 @@ export default function PassengerReservation({
         </ol>
       </div>
 
-      <div className="grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]">
-        {/* ===== Colonne gauche : voyages programmés ===== */}
-        <aside className="xl:sticky xl:top-4 xl:self-start">
-          <Card className="overflow-hidden rounded-2xl border-blue-100 shadow-sm">
-            <div className="flex items-center justify-between gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-3">
-              <div className="flex items-center gap-2">
-                <CalendarClock className="h-5 w-5 text-blue-800" />
-                <h3 className="text-sm font-semibold text-slate-900">Voyages programmés</h3>
-              </div>
-              <span className="rounded-full bg-blue-700 px-2 py-0.5 text-xs font-semibold text-white">
-                {upcomingTrips.length}
-              </span>
-            </div>
-            <CardContent className="max-h-[560px] space-y-2 overflow-y-auto p-3">
-              {upcomingTrips.length === 0 && (
-                <p className="rounded-lg bg-amber-50 p-3 text-xs text-amber-800">
-                  Aucun voyage à venir n’est programmé pour le moment.
-                </p>
-              )}
-              {upcomingTrips.map((t) => {
-                const d = new Date(t.depart);
-                const selected =
-                  String(t.from) === form.departure &&
-                  String(t.to) === form.destination &&
-                  toLocalIsoDate(d) === form.date;
-                return (
-                  <button
-                    key={String(t.id)}
-                    type="button"
-                    onClick={() => pickTrip(t)}
-                    className={`w-full rounded-lg border p-2.5 text-left transition hover:border-blue-400 hover:bg-blue-50 ${
-                      selected ? "border-blue-600 bg-blue-50 ring-1 ring-blue-300" : "border-slate-200 bg-white"
-                    }`}
-                  >
-                    <p className="flex items-center gap-1 text-sm font-semibold text-blue-900">
-                      <span className="truncate">{String(t.from)}</span>
-                      <ArrowRight className="h-3.5 w-3.5 shrink-0 text-blue-600" />
-                      <span className="truncate">{String(t.to)}</span>
-                    </p>
-                    <p className="mt-1 flex items-center gap-1 text-xs text-slate-600">
-                      <CalendarDays className="h-3.5 w-3.5 text-blue-600" />
-                      {d.toLocaleDateString("fr-FR")} · {pad2(d.getHours())}:{pad2(d.getMinutes())}
-                    </p>
-                    <p className="mt-0.5 flex items-center gap-1 text-xs text-slate-500">
-                      <Anchor className="h-3.5 w-3.5 text-blue-600" />
-                      {boatName(t.boatId)}
-                    </p>
-                  </button>
-                );
-              })}
-            </CardContent>
-            <p className="border-t border-blue-100 px-4 py-2 text-[11px] text-slate-500">
-              Cliquez sur un voyage pour remplir le formulaire.
-            </p>
-          </Card>
-        </aside>
+      <Card className="rounded-2xl border-blue-100 shadow-sm">
+        <CardContent className="space-y-5 p-4">
+          {/* Cartes de statistiques */}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard tone="blue" icon={Ship} title="Tous les bateaux" value={boat.length} unit="bateaux disponibles" />
+            <StatCard tone="green" icon={CalendarDays} title="Trajets disponibles" value={tripsToday || (trip ?? []).length} unit="aujourd’hui" />
+            <StatCard tone="purple" icon={UserRound} title="Voyageurs" value={pendingPassengers} unit="en attente" />
+            <StatCard tone="sky" icon={Clock} title="Heure actuelle" value={clock} sub={dateLabel} />
+          </div>
 
-        {/* ===== Formulaire ===== */}
-        <Card className="min-w-0 rounded-2xl border-blue-100 shadow-sm">
-          <CardContent className="space-y-5 p-4">
-            {/* Cartes de statistiques */}
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 2xl:grid-cols-4">
-              <StatCard tone="blue" icon={Ship} title="Tous les bateaux" value={boat.length} unit="bateaux disponibles" />
-              <StatCard tone="green" icon={CalendarDays} title="Trajets disponibles" value={tripsToday || upcomingTrips.length} unit={tripsToday ? "aujourd’hui" : "à venir"} />
-              <StatCard tone="purple" icon={UserRound} title="Voyageurs" value={pendingPassengers} unit="en attente" />
-              <StatCard tone="sky" icon={Clock} title="Heure actuelle" value={clock} sub={dateLabel} />
-            </div>
-
-            <form className="space-y-5" onSubmit={handleSubmit}>
-              {/* Informations du client */}
-              <section className="overflow-hidden rounded-xl border border-blue-100 bg-white">
-                <SectionBar icon={Users} title="Informations du client" />
-                <div className="grid gap-4 p-5 md:grid-cols-2 2xl:grid-cols-[1.2fr_1.2fr_1.2fr_1fr_1fr]">
-                  <Field label="Nom complet" required htmlFor="clientName">
-                    <IconInput
-                      icon={User}
-                      id="clientName"
-                      value={form.clientName}
-                      onChange={(e) => update("clientName", e.target.value)}
-                      placeholder="Ex. : Randriatsara Jean"
-                    />
-                  </Field>
-                  <Field label="Téléphone" required htmlFor="clientPhone">
-                    <IconInput
-                      icon={Phone}
-                      id="clientPhone"
-                      type="tel"
-                      value={form.clientPhone}
-                      onChange={(e) => update("clientPhone", e.target.value)}
-                      placeholder="Ex. : 032 12 345 67"
-                    />
-                  </Field>
-                  <Field label="E-mail" htmlFor="clientEmail">
-                    <IconInput
-                      icon={Mail}
-                      id="clientEmail"
-                      type="email"
-                      value={form.clientEmail}
-                      onChange={(e) => update("clientEmail", e.target.value)}
-                      placeholder="Ex. : client@example.com"
-                    />
-                  </Field>
-                  <Field label="Nombre de passagers" required>
-                    <div className="flex h-11 items-center justify-between rounded-lg border border-slate-200 bg-blue-50/60 px-1">
-                      <button
-                        type="button"
-                        aria-label="Moins de passagers"
-                        className="flex h-9 w-9 items-center justify-center rounded-md text-blue-800 transition hover:bg-blue-100 disabled:opacity-40"
-                        disabled={form.passengers <= 1}
-                        onClick={() => update("passengers", Math.max(1, form.passengers - 1))}
-                      >
-                        <Minus className="h-4 w-4" />
-                      </button>
-                      <span className="text-sm font-semibold">{form.passengers}</span>
-                      <button
-                        type="button"
-                        aria-label="Plus de passagers"
-                        className="flex h-9 w-9 items-center justify-center rounded-md text-blue-800 transition hover:bg-blue-100"
-                        onClick={() => update("passengers", form.passengers + 1)}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </Field>
-                  <Field label="Marchandise">
-                    <Select value={form.cargoType} onValueChange={(v) => update("cargoType", v)}>
-                      <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
-                        <Package className="mr-2 h-4 w-4 text-blue-700" />
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {CARGO_OPTIONS.map((o) => (
-                          <SelectItem key={o.value} value={o.value}>
-                            {o.label}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                </div>
-              </section>
-
-              {/* Détails du voyage */}
-              <section className="overflow-hidden rounded-xl border border-blue-100 bg-white">
-                <SectionBar icon={Ship} title="Détails du voyage" />
-                <div className="grid gap-4 p-5 md:grid-cols-2 2xl:grid-cols-4">
-                  <Field label="Départ" required>
-                    <Select
-                      value={form.departure}
-                      onValueChange={(v) => {
-                        update("departure", v);
-                        if (v === form.destination) update("destination", "");
-                      }}
+          <form className="space-y-5" onSubmit={handleSubmit}>
+            {/* Informations du client */}
+            <section className="overflow-hidden rounded-xl border border-blue-100 bg-white">
+              <SectionBar icon={Users} title="Informations du client" />
+              <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-[1.2fr_1.2fr_1.2fr_1fr_1fr]">
+                <Field label="Nom complet" required htmlFor="clientName">
+                  <IconInput
+                    icon={User}
+                    id="clientName"
+                    value={form.clientName}
+                    onChange={(e) => update("clientName", e.target.value)}
+                    placeholder="Ex. : Randriatsara Jean"
+                  />
+                </Field>
+                <Field label="Téléphone" required htmlFor="clientPhone">
+                  <IconInput
+                    icon={Phone}
+                    id="clientPhone"
+                    type="tel"
+                    value={form.clientPhone}
+                    onChange={(e) => update("clientPhone", e.target.value)}
+                    placeholder="Ex. : 032 12 345 67"
+                  />
+                </Field>
+                <Field label="E-mail" htmlFor="clientEmail">
+                  <IconInput
+                    icon={Mail}
+                    id="clientEmail"
+                    type="email"
+                    value={form.clientEmail}
+                    onChange={(e) => update("clientEmail", e.target.value)}
+                    placeholder="Ex. : client@example.com"
+                  />
+                </Field>
+                <Field label="Nombre de passagers" required>
+                  <div className="flex h-11 items-center justify-between rounded-lg border border-slate-200 bg-blue-50/60 px-1">
+                    <button
+                      type="button"
+                      aria-label="Moins de passagers"
+                      className="flex h-9 w-9 items-center justify-center rounded-md text-blue-800 transition hover:bg-blue-100 disabled:opacity-40"
+                      disabled={form.passengers <= 1}
+                      onClick={() => update("passengers", Math.max(1, form.passengers - 1))}
                     >
-                      <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
-                        <MapPin className="mr-2 h-4 w-4 text-blue-700" />
-                        <SelectValue placeholder="Choisir le port de départ" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ports.map((p) => (
-                          <SelectItem key={p} value={p}>
-                            {p}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field label="Destination" required>
-                    <Select value={form.destination} onValueChange={(v) => update("destination", v)}>
-                      <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
-                        <MapPin className="mr-2 h-4 w-4 text-blue-700" />
-                        <SelectValue placeholder="Choisir le port d’arrivée" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {destinationOptions
-                          .filter((p) => p !== form.departure)
-                          .map((p) => (
-                            <SelectItem key={p} value={p}>
-                              {p}
-                            </SelectItem>
-                          ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field label="Date du voyage" required htmlFor="date">
-                    <Input
-                      id="date"
-                      type="date"
-                      min={todayIso()}
-                      value={form.date}
-                      onChange={(e) => update("date", e.target.value)}
-                      className="h-11 border-slate-200 bg-white text-sm"
-                    />
-                  </Field>
-                  <Field label="Heure de départ" optional htmlFor="time">
-                    <Input
-                      id="time"
-                      type="time"
-                      value={form.time}
-                      onChange={(e) => update("time", e.target.value)}
-                      className="h-11 border-slate-200 bg-white text-sm"
-                    />
-                  </Field>
-
-                  <Field label="Bateau" required>
-                    <Select value={form.boatId} onValueChange={(v) => update("boatId", v)}>
-                      <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
-                        <Anchor className="mr-2 h-4 w-4 text-blue-700" />
-                        <SelectValue placeholder="Choisir un bateau" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {boat.map((item) => (
-                          <SelectItem key={String(item.id)} value={String(item.id)}>
-                            {item.name} · {item.capacity} places
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </Field>
-                  <Field label="Prix unitaire (Ar)" htmlFor="unitPrice">
-                    <IconInput
-                      icon={Coins}
-                      id="unitPrice"
-                      type="number"
-                      min="0"
-                      value={form.unitPrice || ""}
-                      onChange={(e) => update("unitPrice", Number(e.target.value))}
-                      placeholder="0"
-                      className="bg-blue-50/60"
-                    />
-                  </Field>
-                  <Field label="Prix total (Ar)" htmlFor="totalPrice">
-                    <IconInput
-                      icon={Coins}
-                      id="totalPrice"
-                      value={totalPrice ? totalPrice.toLocaleString("fr-FR") : ""}
-                      readOnly
-                      placeholder="0"
-                      className="bg-blue-50/60"
-                    />
-                  </Field>
-                  <Field label="Poids total (kg)" required htmlFor="weightKg">
-                    <IconInput
-                      icon={Scale}
-                      id="weightKg"
-                      type="number"
-                      min="0"
-                      step="any"
-                      value={form.weightKg || ""}
-                      onChange={(e) => update("weightKg", Number(e.target.value))}
-                      placeholder="Ex. : 50"
-                    />
-                  </Field>
-                </div>
-
-                {/* Avertissement : aucun voyage pour ce trajet / cette date */}
-                {noTripWarning && (
-                  <div className="mx-5 mb-5 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                    <p>
-                      Aucun voyage programmé de <strong>{form.departure}</strong> vers{" "}
-                      <strong>{form.destination}</strong> le {form.date}. Choisissez un voyage dans la liste
-                      « Voyages programmés » à gauche.
-                    </p>
+                      <Minus className="h-4 w-4" />
+                    </button>
+                    <span className="text-sm font-semibold">{form.passengers}</span>
+                    <button
+                      type="button"
+                      aria-label="Plus de passagers"
+                      className="flex h-9 w-9 items-center justify-center rounded-md text-blue-800 transition hover:bg-blue-100"
+                      onClick={() => update("passengers", form.passengers + 1)}
+                    >
+                      <Plus className="h-4 w-4" />
+                    </button>
                   </div>
-                )}
-
-                {/* Informations complémentaires */}
-                <div className="border-t border-blue-100 bg-blue-50/40 p-5">
-                  <Field label="Informations complémentaires" htmlFor="notes">
-                    <div className="relative">
-                      <FileText className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-blue-800" />
-                      <textarea
-                        id="notes"
-                        rows={3}
-                        maxLength={NOTES_MAX}
-                        value={form.notes}
-                        onChange={(e) => update("notes", e.target.value)}
-                        placeholder="Ajouter des notes (ex. : besoins particuliers, contact à bord, etc.)..."
-                        className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 pb-7 pl-11 text-sm outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
-                      />
-                      <span className="absolute bottom-2 right-3 text-xs text-slate-400">
-                        {form.notes.length}/{NOTES_MAX}
-                      </span>
-                    </div>
-                  </Field>
-                </div>
-              </section>
-
-              {error && (
-                <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
-              )}
-
-              {/* Actions */}
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="h-12 gap-2 rounded-lg border-slate-200 px-6 font-medium"
-                  onClick={reset}
-                >
-                  <X className="h-4 w-4 text-blue-800" /> Réinitialiser
-                </Button>
-                <Button
-                  type="submit"
-                  disabled={isSubmitting}
-                  className="h-12 gap-2 rounded-lg bg-blue-700 px-7 font-semibold text-white shadow-md hover:bg-blue-800"
-                >
-                  {isSubmitting ? (
-                    "Ajout en cours…"
-                  ) : (
-                    <>
-                      <Send className="h-4 w-4" /> Ajouter la réservation
-                    </>
-                  )}
-                </Button>
+                </Field>
+                <Field label="Marchandise">
+                  <Select value={form.cargoType} onValueChange={(v) => update("cargoType", v)}>
+                    <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
+                      <Package className="mr-2 h-4 w-4 text-blue-700" />
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {CARGO_OPTIONS.map((o) => (
+                        <SelectItem key={o.value} value={o.value}>
+                          {o.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
               </div>
-            </form>
-          </CardContent>
-        </Card>
-      </div>
+            </section>
+
+            {/* Détails du voyage */}
+            <section className="overflow-hidden rounded-xl border border-blue-100 bg-white">
+              <SectionBar icon={Ship} title="Détails du voyage" />
+              <div className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
+                <Field label="Départ" required>
+                  <Select value={form.departure} onValueChange={(v) => update("departure", v)}>
+                    <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
+                      <MapPin className="mr-2 h-4 w-4 text-blue-700" />
+                      <SelectValue placeholder="Choisir le port de départ" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ports.map((p) => (
+                        <SelectItem key={p} value={p}>
+                          {p}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Destination" required>
+                  <Select value={form.destination} onValueChange={(v) => update("destination", v)}>
+                    <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
+                      <MapPin className="mr-2 h-4 w-4 text-blue-700" />
+                      <SelectValue placeholder="Choisir le port d’arrivée" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {ports.map((p) => (
+                        <SelectItem key={p} value={p}>
+                          {p}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Date du voyage" required htmlFor="date">
+                  <Input
+                    id="date"
+                    type="date"
+                    min={todayIso()}
+                    value={form.date}
+                    onChange={(e) => update("date", e.target.value)}
+                    className="h-11 border-slate-200 bg-white text-sm"
+                  />
+                </Field>
+                <Field label="Heure de départ" optional htmlFor="time">
+                  <Input
+                    id="time"
+                    type="time"
+                    value={form.time}
+                    onChange={(e) => update("time", e.target.value)}
+                    className="h-11 border-slate-200 bg-white text-sm"
+                  />
+                </Field>
+
+                <Field label="Bateau" required>
+                  <Select value={form.boatId} onValueChange={(v) => update("boatId", v)}>
+                    <SelectTrigger className="h-11 border-slate-200 bg-white text-sm">
+                      <Anchor className="mr-2 h-4 w-4 text-blue-700" />
+                      <SelectValue placeholder="Choisir un bateau" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {boat.map((item) => (
+                        <SelectItem key={item.id} value={item.id}>
+                          {item.name} · {item.capacity} places
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Prix unitaire (Ar)" htmlFor="unitPrice">
+                  <IconInput
+                    icon={Coins}
+                    id="unitPrice"
+                    type="number"
+                    min="0"
+                    value={form.unitPrice || ""}
+                    onChange={(e) => update("unitPrice", Number(e.target.value))}
+                    placeholder="0"
+                    className="bg-blue-50/60"
+                  />
+                </Field>
+                <Field label="Prix total (Ar)" htmlFor="totalPrice">
+                  <IconInput
+                    icon={Coins}
+                    id="totalPrice"
+                    value={totalPrice ? totalPrice.toLocaleString("fr-FR") : ""}
+                    readOnly
+                    placeholder="0"
+                    className="bg-blue-50/60"
+                  />
+                </Field>
+                <Field label="Poids total (kg)" required htmlFor="weightKg">
+                  <IconInput
+                    icon={Scale}
+                    id="weightKg"
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={form.weightKg || ""}
+                    onChange={(e) => update("weightKg", Number(e.target.value))}
+                    placeholder="Ex. : 50"
+                  />
+                </Field>
+              </div>
+
+              {/* Informations complémentaires */}
+              <div className="border-t border-blue-100 bg-blue-50/40 p-5">
+                <Field label="Informations complémentaires" htmlFor="notes">
+                  <div className="relative">
+                    <FileText className="pointer-events-none absolute left-3 top-3 h-5 w-5 text-blue-800" />
+                    <textarea
+                      id="notes"
+                      rows={3}
+                      maxLength={NOTES_MAX}
+                      value={form.notes}
+                      onChange={(e) => update("notes", e.target.value)}
+                      placeholder="Ajouter des notes (ex. : besoins particuliers, contact à bord, etc.)..."
+                      className="w-full resize-none rounded-lg border border-slate-200 bg-white p-3 pb-7 pl-11 text-sm outline-none placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-100"
+                    />
+                    <span className="absolute bottom-2 right-3 text-xs text-slate-400">
+                      {form.notes.length}/{NOTES_MAX}
+                    </span>
+                  </div>
+                </Field>
+              </div>
+            </section>
+
+            {error && (
+              <p className="rounded-md bg-destructive/10 p-3 text-sm text-destructive">{error}</p>
+            )}
+
+            {/* Actions */}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <Button
+                type="button"
+                variant="outline"
+                className="h-12 gap-2 rounded-lg border-slate-200 px-6 font-medium"
+                onClick={reset}
+              >
+                <X className="h-4 w-4 text-blue-800" /> Réinitialiser
+              </Button>
+              <Button
+                type="submit"
+                disabled={isSubmitting}
+                className="h-12 gap-2 rounded-lg bg-blue-700 px-7 font-semibold text-white shadow-md hover:bg-blue-800"
+              >
+                {isSubmitting ? (
+                  "Ajout en cours…"
+                ) : (
+                  <>
+                    <Send className="h-4 w-4" /> Ajouter la réservation
+                  </>
+                )}
+              </Button>
+            </div>
+          </form>
+        </CardContent>
+      </Card>
 
       {/* garde l'import utilisé si le composant est étendu */}
       <span className="hidden">
